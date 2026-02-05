@@ -1,0 +1,25 @@
+# --- Data Science & Manipulation ---
+pandas
+numpy
+scikit-learn
+statsmodels
+xgboost
+prophet
+
+# --- Visualization ---
+matplotlib
+seaborn
+plotly
+
+# --- Dashboard & App ---
+streamlit
+
+# --- Scraping & Web ---
+requests
+beautifulsoup4
+lxml
+
+# --- Database & Utils ---
+psycopg-binary
+python-dotenv
+pytz
