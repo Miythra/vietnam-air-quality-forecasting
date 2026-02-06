@@ -14,15 +14,23 @@ from PIL import Image
 
 def configure_genai():
     """Configures the Google Gemini API."""
-    load_dotenv()
+    load_dotenv() # Charge .env en local
+    
+    # 1. Essaie de trouver la clé dans l'environnement (Local)
     api_key = os.environ.get('GEMINI_API_TOKEN')
+    
+    # 2. Si vide, cherche dans les secrets Streamlit (Cloud)
+    if not api_key and "GEMINI_API_TOKEN" in st.secrets:
+        api_key = st.secrets["GEMINI_API_TOKEN"]
+
     if not api_key:
-        st.sidebar.error("⚠️ GEMINI_API_TOKEN not found in .env")
+        # On ne bloque pas tout si l'IA manque, on avertit juste
+        st.sidebar.warning("⚠️ GEMINI_API_TOKEN not found. AI features disabled.")
         return False
     
     genai.configure(api_key=api_key)
     return True
-
+    
 def analyze_chart_with_gemini(fig, chart_description):
     """
     Converts a Matplotlib figure to an image, sends it to Gemini,
@@ -77,16 +85,26 @@ def render_ai_analysis_ui(fig, title):
 @st.cache_data(ttl=900) 
 def load_data_from_db():
     load_dotenv()
+    
+    # 1. Essaie de trouver l'URL en local
     db_url = os.environ.get('POSTGRES_URL')
+
+    # 2. Si vide, cherche dans les secrets Streamlit (Cloud)
+    # Note: Streamlit range parfois les secrets sous st.secrets["POSTGRES_URL"] 
+    # ou sous st.secrets["general"]["POSTGRES_URL"] selon ta config TOML.
+    if not db_url:
+        if "POSTGRES_URL" in st.secrets:
+            db_url = st.secrets["POSTGRES_URL"]
+        elif "general" in st.secrets and "POSTGRES_URL" in st.secrets["general"]:
+             db_url = st.secrets["general"]["POSTGRES_URL"]
 
     if not db_url:
         st.error("Error: POSTGRES_URL environment variable not found.")
-        return None
+        st.stop() # Arrête l'app proprement ici
 
     query = "SELECT * FROM aqi_data ORDER BY timestamp;"
 
     try:
-        # st.info("Connecting to Vercel Postgres database...") # Optional: Comment out to reduce UI clutter
         with psycopg.connect(db_url) as conn:
             df = pd.read_sql(query, conn)
         return df
