@@ -13,7 +13,7 @@ plotly
 
 # --- Dashboard & App ---
 streamlit
-
+altair<5
 # --- Scraping & Web ---
 requests
 beautifulsoup4
