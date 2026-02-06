@@ -12,8 +12,8 @@ seaborn
 plotly
 
 # --- Dashboard & App ---
-streamlit
-altair<5
+streamlit>=1.41.0
+
 # --- Scraping & Web ---
 requests
 beautifulsoup4
