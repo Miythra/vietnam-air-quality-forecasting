@@ -2,29 +2,23 @@
 pandas
 numpy
 scikit-learn
-statsmodels
-xgboost
-prophet
 
-# --- Visualization & Images ---
+# --- Visualization ---
 matplotlib
 seaborn
 plotly
-Pillow
 
-# --- Dashboard & App ---
+# --- App ---
 streamlit>=1.41.0
 
 # --- Scraping & Web ---
 requests
 beautifulsoup4
-lxml
 
-# --- Database & Utils ---
-psycopg[binary]
+# --- Database (CRITIQUE) ---
+psycopg2-binary
+sqlalchemy
+
+# --- Utils ---
 python-dotenv
 pytz
-
-# --- AI & LLM ---
-google-generativeai
-sqlalchemy
