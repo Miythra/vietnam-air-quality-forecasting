@@ -100,6 +100,51 @@ def run_forecasting(df, city):
 
 # --- MAIN APP ---
 def main():
+    # --- DEBUT DU BLOC TEMPORAIRE D'IMPORTATION ---
+    st.sidebar.header("🛠️ Admin Zone")
+    uploaded_file = st.sidebar.file_uploader("Uploader l'historique (CSV)", type=['csv'])
+    
+    if uploaded_file is not None:
+        if st.sidebar.button("Lancer l'importation Cloud"):
+            with st.spinner("Le serveur Streamlit lit le fichier..."):
+                import pandas as pd
+                import psycopg
+                from sqlalchemy import create_engine
+                
+                # 1. Lecture du fichier uploadé
+                df = pd.read_csv(uploaded_file)
+                
+                # Nettoyage
+                if 'id' in df.columns: df = df.drop(columns=['id'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df = df.replace({pd.NA: None, float('nan'): None})
+                
+                st.info(f"Fichier lu : {len(df)} lignes. Envoi vers Neon en cours...")
+                
+                # 2. Récupération de la clé secrète (Déjà configurée sur Streamlit Cloud !)
+                # On utilise la connexion directe pour aller plus vite
+                db_url = st.secrets["POSTGRES_URL"].replace("sslmode=require", "sslmode=require")
+                
+                try:
+                    # On utilise SQLAlchemy pour l'envoi massif
+                    engine = create_engine(db_url.replace("postgresql://", "postgresql+psycopg://"))
+                    
+                    # Envoi par paquets (Chunking)
+                    chunk_size = 1000
+                    total_chunks = (len(df) // chunk_size) + 1
+                    my_bar = st.progress(0)
+                    
+                    for i, chunk in enumerate(range(0, len(df), chunk_size)):
+                        batch = df.iloc[chunk:chunk+chunk_size]
+                        batch.to_sql('aqi_data', engine, if_exists='append', index=False, method='multi')
+                        my_bar.progress((i + 1) / total_chunks)
+                        
+                    st.success("🎉 SUCCÈS ! Tout l'historique est dans la base !")
+                    st.balloons()
+                    
+                except Exception as e:
+                    st.error(f"Erreur d'importation : {e}")
+    # --- FIN DU BLOC TEMPORAIRE ---
     # Load Data
     with st.spinner('Connexion au flux de données...'):
         df_raw = load_data()
