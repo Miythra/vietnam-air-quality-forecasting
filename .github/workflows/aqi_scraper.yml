@@ -1,0 +1,38 @@
+name: Hourly AQI Scraper
+
+on:
+  # 1. Automatique : Tous les jours, à la 15ème minute de chaque heure
+  schedule:
+    - cron: '15 * * * *'
+  # 2. Manuel : Bouton pour lancer le script quand tu veux tester
+  workflow_dispatch:
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Étape A : Récupérer ton code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Étape B : Installer Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Étape C : Installer les outils (Pandas, Psycopg, etc.)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      # Étape D : Lancer le script (Chemin mis à jour !)
+      - name: Run ETL Script
+        env:
+          # On donne la clé de la base de données au script
+          POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+        run: |
+          # J'ai mis le chemin exact vu sur ta capture d'écran
+          python src/scraping/run_scrape.py
