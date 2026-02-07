@@ -2,315 +2,221 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import os
-import psycopg
-from dotenv import load_dotenv
-from datetime import datetime, timedelta
-import pytz
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
 import numpy as np
 
-# --- Configuration de la Page ---
-st.set_page_config(layout="wide", page_title="Vietnam AQI Sentinel", page_icon="🇻🇳")
+# --- CONFIGURATION DE LA PAGE ---
+st.set_page_config(
+    page_title="Vietnam Air Quality AI",
+    page_icon="🇻🇳",
+    layout="wide"
+)
 
-# --- CSS Personnalisé (Look Pro) ---
-st.markdown("""
-<style>
-    .big-font { font-size:20px !important; }
-    .metric-card { background-color: #f9f9f9; padding: 15px; border-radius: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); text-align: center;}
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 5px 5px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
-    .stTabs [aria-selected="true"] { background-color: #ffffff; border-bottom: 2px solid #ff4b4b; }
-</style>
-""", unsafe_allow_html=True)
+# --- FONCTIONS UTILITAIRES ---
 
-# --- Coordonnées (Pour la carte) ---
-CITY_COORDS = {
-    'Hanoi': {'lat': 21.0285, 'lon': 105.8542}, 'Ho Chi Minh City': {'lat': 10.8231, 'lon': 106.6297},
-    'Da Nang': {'lat': 16.0544, 'lon': 108.2022}, 'Hai Phong': {'lat': 20.8449, 'lon': 106.6881},
-    'Can Tho': {'lat': 10.0452, 'lon': 105.7469}, 'Nha Trang': {'lat': 12.2388, 'lon': 109.1967},
-    'Hue': {'lat': 16.4637, 'lon': 107.5909}, 'Vinh Phuc': {'lat': 21.3083, 'lon': 105.6046},
-    'Bac Ninh': {'lat': 21.1861, 'lon': 106.0763}, 'Quang Ninh': {'lat': 20.9500, 'lon': 107.0833},
-    'Nam Dinh': {'lat': 20.4200, 'lon': 106.1683}, 'Thai Nguyen': {'lat': 21.5942, 'lon': 105.8481}
-}
+def get_aqi_color(aqi):
+    if aqi <= 50: return "#00E400"  # Good (Green)
+    elif aqi <= 100: return "#FFFF00" # Moderate (Yellow)
+    elif aqi <= 150: return "#FF7E00" # Unhealthy for Sensitive (Orange)
+    elif aqi <= 200: return "#FF0000" # Unhealthy (Red)
+    elif aqi <= 300: return "#8F3F97" # Very Unhealthy (Purple)
+    else: return "#7E0023" # Hazardous (Maroon)
 
-# --- 1. Chargement & Caching ---
-@st.cache_data(ttl=300)
-def load_data():
-    load_dotenv()
-    db_url = os.environ.get('POSTGRES_URL')
-    if not db_url:
-        if "POSTGRES_URL" in st.secrets: db_url = st.secrets["POSTGRES_URL"]
-        elif "general" in st.secrets: db_url = st.secrets["general"]["POSTGRES_URL"]
-    
-    if not db_url:
-        st.error("🚨 Base de données introuvable (Secrets manquants).")
-        st.stop()
+# --- CHARGEMENT DES DONNÉES ---
 
-    query = "SELECT * FROM aqi_data ORDER BY timestamp DESC;"
+@st.cache_data
+def load_archive_data():
+    """Charge le CSV local pour la partie Analyse/Archive"""
     try:
-        with psycopg.connect(db_url) as conn:
-            df = pd.read_sql(query, conn)
-        
-        # Preprocessing
+        # Assure-toi que le fichier s'appelle bien 'aqi_data.csv' et est à la racine ou dans src
+        df = pd.read_csv('aqi_data.csv') 
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        if df['timestamp'].dt.tz is None:
-            df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
-        df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Bangkok')
-        
-        numeric_cols = ['aqi', 'pm25', 'pm10', 'co', 'so2', 'no2', 'o3']
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Ajout colonnes temporelles
-        df['date'] = df['timestamp'].dt.date
-        df['hour'] = df['timestamp'].dt.hour
-        return df
+        # Nettoyage rapide
+        cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
+        for col in cols_num:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df.dropna()
     except Exception as e:
-        st.error(f"Erreur SQL : {e}")
-        return pd.DataFrame()
+        return None
 
-# --- 2. Fonction de Prédiction (Simulation ou Modèle) ---
-def run_forecasting(df, city):
-    """
-    Simule une prédiction basée sur les données récentes.
-    À remplacer par `model.predict()` si tu uploads ton fichier .pkl
-    """
-    city_data = df[df['location'] == city].sort_values('timestamp')
-    if city_data.empty: return None, None, None
+def init_connection():
+    """Connexion à NeonDB pour le Live"""
+    return st.connection("postgresql", type="sql")
 
-    # 1. Calculer la moyenne des dernières 24h (Réalité)
-    last_24h = city_data.tail(24)
-    current_aqi = last_24h['aqi'].iloc[-1]
-    avg_24h = last_24h['aqi'].mean()
+def load_live_data(conn):
+    """Récupère les données fraiches de Neon"""
+    try:
+        return conn.query('SELECT * FROM aqi_data ORDER BY timestamp DESC;', ttl="10m")
+    except:
+        return pd.DataFrame() # Retourne vide si erreur (table vide)
 
-    # 2. "Prédiction" pour les prochaines 24h 
-    # (Ici on utilise une moyenne pondérée + tendance récente comme proxy)
-    trend = current_aqi - avg_24h
-    predicted_next_24h = avg_24h + (trend * 0.5) # Amortissement
-    
-    # Générer une courbe prévisionnelle
-    future_dates = [city_data['timestamp'].max() + timedelta(hours=i) for i in range(1, 13)]
-    future_values = [current_aqi + (trend * 0.1 * i) + np.random.normal(0, 5) for i in range(1, 13)]
-    
-    forecast_df = pd.DataFrame({'timestamp': future_dates, 'aqi': future_values, 'type': 'Prédiction'})
-    history_df = last_24h[['timestamp', 'aqi']].copy()
-    history_df['type'] = 'Historique'
-    
-    return current_aqi, predicted_next_24h, pd.concat([history_df, forecast_df])
+# --- NAVIGATION ---
+st.sidebar.title("🔍 Navigation")
+page = st.sidebar.radio("Aller vers :", ["📊 Archives & Performance IA", "🔴 Live Data (Temps Réel)"])
 
-# --- MAIN APP ---
-def main():
-    # --- DEBUT DU BLOC TEMPORAIRE D'IMPORTATION (CORRIGÉ) ---
-    st.sidebar.header("🛠️ Admin Zone")
-    uploaded_file = st.sidebar.file_uploader("Uploader l'historique (CSV)", type=['csv'])
-    
-    if uploaded_file is not None:
-        if st.sidebar.button("Lancer l'importation Cloud"):
-            with st.spinner("Le serveur Streamlit lit et nettoie le fichier..."):
-                import pandas as pd
-                from sqlalchemy import create_engine, text
-                
-                # 1. Lecture du fichier
-                df = pd.read_csv(uploaded_file)
-                
-                # NETTOYAGE AGRESSIF (La partie importante !)
-                # On supprime l'ID s'il existe
-                if 'id' in df.columns: df = df.drop(columns=['id'])
-                
-                # On convertit la date
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                
-                # On FORCE la conversion en nombres pour toutes les colonnes de pollution
-                # errors='coerce' va transformer les erreurs (texte, tirets...) en NaN (vide)
-                cols_to_fix = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
-                for col in cols_to_fix:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                
-                # On remplace les NaN par None pour SQL
-                df = df.replace({float('nan'): None})
-                
-                st.info(f"Fichier nettoyé : {len(df)} lignes. Envoi vers Neon en cours...")
-                
-                # 2. Connexion
-                db_url = st.secrets["POSTGRES_URL"].replace("sslmode=require", "sslmode=require")
-                
-                try:
-                    engine = create_engine(db_url.replace("postgresql://", "postgresql+psycopg://"))
-                    
-                    # Envoi par paquets de 1000
-                    chunk_size = 1000
-                    total_chunks = (len(df) // chunk_size) + 1
-                    my_bar = st.progress(0)
-                    
-                    for i, chunk in enumerate(range(0, len(df), chunk_size)):
-                        batch = df.iloc[chunk:chunk+chunk_size]
-                        batch.to_sql('aqi_data', engine, if_exists='append', index=False, method='multi')
-                        my_bar.progress((i + 1) / total_chunks)
-                        
-                    st.success("🎉 SUCCÈS TOTAL ! Tout l'historique est validé et importé.")
-                    st.balloons()
-                    
-                except Exception as e:
-                    st.error(f"Erreur d'importation : {e}")
-    # --- FIN DU BLOC TEMPORAIRE ---
-    # Load Data
-    with st.spinner('Connexion au flux de données...'):
-        df_raw = load_data()
+# ==============================================================================
+# PAGE 1 : ARCHIVES & PERFORMANCE (Le CSV)
+# ==============================================================================
+if page == "📊 Archives & Performance IA":
+    st.title("🧠 Analyse de Performance du Modèle")
+    st.markdown("""
+    Cette section utilise les **données historiques** pour évaluer la capacité de l'IA à prédire la qualité de l'air.
+    Nous simulons des prédictions passées pour comparer la **théorie vs la réalité**.
+    """)
 
-    if df_raw.empty: return
+    df = load_archive_data()
 
-    # --- SIDEBAR ---
-    st.sidebar.title("🎛️ Contrôles")
-    
-    # Sélecteur de Ville (Global)
-    cities = sorted(df_raw['location'].unique())
-    if 'Hanoi' in cities: index_hanoi = cities.index('Hanoi')
-    else: index_hanoi = 0
-    selected_city = st.sidebar.selectbox("📍 Ville Cible", cities, index=index_hanoi)
-    
-    # Status Système
-    last_update = df_raw['timestamp'].max()
-    now = datetime.now(pytz.timezone('Asia/Bangkok'))
-    is_live = (now - last_update) < timedelta(hours=4)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("État du Système")
-    if is_live:
-        st.sidebar.success(f"🟢 EN LIGNE\n\nMaj: {last_update.strftime('%H:%M')}")
-    else:
-        st.sidebar.error(f"🔴 OFF-LINE\n\nArrêt: {last_update.strftime('%d/%m %H:%M')}")
-
-    # --- TABS STRUCTURE ---
-    st.title(f"🇻🇳 Analyse Qualité de l'Air : {selected_city}")
-    
-    tab1, tab2, tab3 = st.tabs(["🔴 Surveillance Live", "📊 Analyse Approfondie", "🔮 Prévisions & IA"])
-
-    # === TAB 1: SURVEILLANCE LIVE ===
-    with tab1:
-        # Filtrer pour la ville
-        city_df = df_raw[df_raw['location'] == selected_city]
-        latest = city_df.iloc[0] # Dernière ligne (triée par desc)
-
-        # 1. Jauge AQI (Gauge Chart)
-        col1, col2 = st.columns([1, 2])
+    if df is not None:
+        # 1. Filtres Latéraux
+        st.sidebar.header("Paramètres de Simulation")
+        locations = df['location'].unique()
+        selected_location = st.sidebar.selectbox("📍 Choisir un lieu", locations)
         
-        with col1:
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number+delta",
-                value = latest['aqi'],
-                domain = {'x': [0, 1], 'y': [0, 1]},
-                title = {'text': "AQI Actuel"},
-                delta = {'reference': city_df.iloc[1]['aqi'], 'increasing': {'color': "red"}},
-                gauge = {
-                    'axis': {'range': [None, 300]},
-                    'bar': {'color': "black", 'thickness': 0.05}, # Petite aiguille noire
-                    'steps': [
-                        {'range': [0, 50], 'color': "#00e400"},
-                        {'range': [50, 100], 'color': "#ffff00"},
-                        {'range': [100, 150], 'color': "#ff7e00"},
-                        {'range': [150, 200], 'color': "#ff0000"},
-                        {'range': [200, 300], 'color': "#8f3f97"}],
-                }
+        # Filtrer par lieu
+        df_loc = df[df['location'] == selected_location].sort_values('timestamp')
+        
+        # Sélecteur de date pour le test
+        min_date = df_loc['timestamp'].min().date()
+        max_date = df_loc['timestamp'].max().date()
+        
+        st.sidebar.info(f"Données disponibles du {min_date} au {max_date}")
+        test_date = st.sidebar.date_input("📅 Date à prédire", max_date, min_value=min_date, max_value=max_date)
+
+        # 2. Préparation du Modèle (Entraînement à la volée pour la démo)
+        # On entraîne sur tout ce qui est AVANT la date choisie
+        split_date = pd.Timestamp(test_date)
+        train_df = df_loc[df_loc['timestamp'] < split_date]
+        test_df = df_loc[df_loc['timestamp'].dt.date == split_date]
+
+        if len(train_df) > 50 and len(test_df) > 0:
+            features = ['pm25', 'no2', 'so2', 'co', 'o3'] # On utilise les polluants pour prédire l'AQI
+            target = 'aqi'
+            
+            X_train = train_df[features]
+            y_train = train_df[target]
+            X_test = test_df[features]
+            y_test = test_df[target]
+
+            # Entraînement rapide
+            model = RandomForestRegressor(n_estimators=50, random_state=42)
+            model.fit(X_train, y_train)
+            
+            # Prédictions
+            y_pred = model.predict(X_test)
+            test_df['predicted_aqi'] = y_pred
+
+            # 3. Affichage des Résultats
+            
+            # Métriques Clés
+            mae = mean_absolute_error(y_test, y_pred)
+            r2 = r2_score(y_test, y_pred)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Date Analysée", f"{test_date}")
+            col2.metric("Précision du Modèle (R²)", f"{r2:.2f}", help="1.0 est parfait, 0.0 est nul")
+            col3.metric("Erreur Moyenne (MAE)", f"{mae:.1f}", help="Écart moyen entre prédiction et réalité")
+
+            # Graphique : Réalité vs Prédiction
+            st.subheader("📉 Comparatif : Réalité vs Prédiction IA")
+            
+            fig = go.Figure()
+            
+            # Ligne Réelle
+            fig.add_trace(go.Scatter(
+                x=test_df['timestamp'], 
+                y=test_df['aqi'],
+                mode='lines+markers',
+                name='Réalité (Mesuré)',
+                line=dict(color='#1f77b4', width=3)
             ))
-            st.plotly_chart(fig_gauge, use_container_width=True)
             
-            # Afficher les polluants clés
-            st.markdown("#### Polluants (µg/m³)")
-            c1, c2 = st.columns(2)
-            c1.metric("PM2.5", f"{latest['pm25']:.1f}")
-            c2.metric("NO2", f"{latest['no2']:.1f}")
-
-        with col2:
-            # Carte centrée sur la ville
-            st.subheader(f"🗺️ Localisation : {selected_city}")
-            map_data = df_raw.groupby('location')[['aqi', 'pm25']].mean().reset_index()
-            map_data['lat'] = map_data['location'].apply(lambda x: CITY_COORDS.get(x, {}).get('lat'))
-            map_data['lon'] = map_data['location'].apply(lambda x: CITY_COORDS.get(x, {}).get('lon'))
-            map_data = map_data.dropna()
+            # Ligne Prédite
+            fig.add_trace(go.Scatter(
+                x=test_df['timestamp'], 
+                y=test_df['predicted_aqi'],
+                mode='lines',
+                name='Prédiction IA',
+                line=dict(color='#ff7f0e', width=3, dash='dot')
+            ))
             
-            # On met en surbrillance la ville choisie
-            fig_map = px.scatter_mapbox(
-                map_data, lat="lat", lon="lon", color="aqi", size="aqi",
-                color_continuous_scale="RdYlGn_r", size_max=40, zoom=6,
-                center=CITY_COORDS.get(selected_city, {'lat':16, 'lon':106}),
-                hover_name="location", mapbox_style="carto-positron"
-            )
-            st.plotly_chart(fig_map, use_container_width=True)
+            fig.update_layout(title=f"Evolution de l'AQI à {selected_location} le {test_date}",
+                              xaxis_title="Heure", yaxis_title="AQI", template="plotly_white")
+            st.plotly_chart(fig, use_container_width=True)
 
-    # === TAB 2: ANALYSE APPROFONDIE (Les graphes intéressants) ===
-    with tab2:
-        st.subheader("🔎 Corrélations et Profils Historiques")
-        
-        c_left, c_right = st.columns(2)
-        
-        with c_left:
-            # 1. Heatmap de Corrélation (Interactive)
-            st.markdown("**Matrice de Corrélation (Tous polluants)**")
-            corr = city_df[['aqi', 'pm25', 'pm10', 'no2', 'so2', 'co', 'o3']].corr()
-            fig_corr = px.imshow(
-                corr, text_auto=True, aspect="auto", color_continuous_scale="RdBu_r",
-                title=f"Corrélations à {selected_city}"
-            )
-            st.plotly_chart(fig_corr, use_container_width=True)
+            # Feature Importance (Sur quoi le modèle se base ?)
+            st.subheader("🧪 Facteurs d'influence")
+            st.markdown("Quels polluants ont le plus pesé dans la décision de l'IA ?")
             
-        with c_right:
-            # 2. Profil de Pollution (Bar Chart)
-            st.markdown("**Profil Moyen de Pollution**")
-            avg_pol = city_df[['pm25', 'pm10', 'no2', 'so2', 'o3']].mean().reset_index()
-            avg_pol.columns = ['Polluant', 'Concentration']
-            fig_prof = px.bar(
-                avg_pol, x='Concentration', y='Polluant', orientation='h',
-                color='Concentration', color_continuous_scale='Reds'
-            )
-            st.plotly_chart(fig_prof, use_container_width=True)
+            importance = pd.DataFrame({
+                'Polluant': features,
+                'Importance': model.feature_importances_
+            }).sort_values(by='Importance', ascending=True)
             
-        # 3. Time Series avec Range Slider (Zoom)
-        st.markdown("### 📅 Historique Complet (Zoomable)")
-        fig_ts = px.line(city_df, x='timestamp', y=['aqi', 'pm25'], title="Evolution Temporelle")
-        fig_ts.update_xaxes(rangeslider_visible=True) # LE SLIDER MAGIQUE
-        st.plotly_chart(fig_ts, use_container_width=True)
+            fig_imp = px.bar(importance, x='Importance', y='Polluant', orientation='h', 
+                             title="Importance des variables", color='Importance', color_continuous_scale='Viridis')
+            st.plotly_chart(fig_imp, use_container_width=True)
 
-    # === TAB 3: FORECASTING (La partie "Lancer le programme") ===
-    with tab3:
-        st.subheader("🔮 Prédiction de l'AQI")
-        st.info("Ce module utilise les données historiques pour projeter la tendance des prochaines 12h.")
+        else:
+            st.warning("⚠️ Pas assez de données pour cette date ou date située au tout début de l'historique. Choisissez une date plus récente.")
+
+    else:
+        st.error("❌ Fichier 'aqi_data.csv' introuvable. Veuillez l'uploader à la racine du projet.")
+
+# ==============================================================================
+# PAGE 2 : LIVE DATA (NeonDB)
+# ==============================================================================
+elif page == "🔴 Live Data (Temps Réel)":
+    st.title("📡 Monitoring en Temps Réel")
+    st.markdown("Connexion directe à la base de données **NeonDB**. Les données apparaissent ici dès qu'elles sont collectées par le scraper.")
+
+    conn = init_connection()
+    df_live = load_live_data(conn)
+
+    if not df_live.empty:
+        # Conversion date
+        df_live['timestamp'] = pd.to_datetime(df_live['timestamp'])
         
-        col_act, col_pred = st.columns([1, 3])
+        # Dernier relevé
+        latest = df_live.iloc[0]
+        st.info(f"Dernière mise à jour : {latest['timestamp']}")
+
+        # KPI Cards pour les villes principales
+        st.subheader("🌍 Situation Actuelle")
+        cols = st.columns(4)
         
-        with col_act:
-            if st.button("🚀 LANCER L'ANALYSE", type="primary"):
-                with st.spinner("Calcul des tendances en cours..."):
-                    current, pred, forecast_df = run_forecasting(df_raw, selected_city)
-                
-                # Metrics
-                st.metric("AQI Actuel", f"{current:.0f}")
-                
-                delta = pred - current
-                st.metric("Tendance (24h)", f"{pred:.0f}", delta=f"{delta:.1f}", delta_color="inverse")
-                
-                if pred > 150:
-                    st.error("⚠️ Prévision : Qualité de l'air MAUVAISE. Port du masque recommandé.")
-                elif pred > 100:
-                    st.warning("⚠️ Prévision : Qualité MÉDIOCRE pour les groupes sensibles.")
-                else:
-                    st.success("✅ Prévision : Qualité de l'air ACCEPTABLE.")
-            else:
-                st.write("Cliquez pour générer la prévision.")
+        # On prend les 4 villes les plus récentes
+        recent_cities = df_live.drop_duplicates(subset=['location']).head(4)
+        
+        for index, (i, row) in enumerate(recent_cities.iterrows()):
+            with cols[index]:
+                color = get_aqi_color(row['aqi'])
+                st.markdown(f"""
+                <div style="background-color: {color}; padding: 10px; border-radius: 10px; color: black; text-align: center;">
+                    <h3>{row['location']}</h3>
+                    <h1>{int(row['aqi'])}</h1>
+                    <p>AQI</p>
+                </div>
+                """, unsafe_allow_html=True)
 
-        with col_pred:
-            if 'forecast_df' in locals() and forecast_df is not None:
-                # Graphique Prédictif
-                fig_pred = px.line(
-                    forecast_df, x='timestamp', y='aqi', color='type',
-                    color_discrete_map={'Historique': 'gray', 'Prédiction': 'blue'},
-                    markers=True, title="Projection AQI (12 Prochaines heures)"
-                )
-                # Zone de confiance (Fake visuals for demo)
-                fig_pred.add_hrect(y0=0, y1=50, fillcolor="green", opacity=0.05, line_width=0)
-                fig_pred.add_hrect(y0=150, y1=300, fillcolor="red", opacity=0.05, line_width=0)
-                
-                st.plotly_chart(fig_pred, use_container_width=True)
+        # Tableau de données brutes
+        st.subheader("📝 Derniers relevés reçus")
+        st.dataframe(df_live)
+        
+        # Bouton refresh manuel
+        if st.button("🔄 Actualiser les données"):
+            st.rerun()
 
-if __name__ == "__main__":
-    main()
+    else:
+        st.container()
+        st.warning("⏳ La base de données est actuellement vide.")
+        st.markdown("""
+        ### Pourquoi est-ce vide ?
+        C'est normal ! Vous venez de créer une nouvelle infrastructure.
+        * Le **Scraper** va s'exécuter automatiquement à la prochaine heure programmée.
+        * Dès que le premier relevé sera capturé, cette page s'animera automatiquement.
+        
+        Revenez dans une heure pour voir les premiers points apparaître ! 🌱
+        """)
