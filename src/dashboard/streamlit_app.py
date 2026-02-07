@@ -18,15 +18,17 @@ st.set_page_config(
 @st.cache_data
 def load_archive_data():
     """
-    Charge le CSV historique en cherchant le fichier de manière intelligente.
+    Charge le CSV et supprime les fuseaux horaires pour éviter les bugs de comparaison.
     """
-    # Liste des endroits probables
+    import os
+    
+    # Recherche du fichier
     current_dir = os.path.dirname(os.path.abspath(__file__))
     possible_paths = [
-        "data/aqi_data.csv",                        # Chemin standard
-        os.path.join(current_dir, "aqi_data.csv"),  # Même dossier
-        "src/data/aqi_data.csv",                    # Dossier src
-        "aqi_data.csv"                              # Racine
+        "data/aqi_data.csv",
+        os.path.join(current_dir, "aqi_data.csv"),
+        "src/data/aqi_data.csv",
+        "aqi_data.csv"
     ]
     
     df = None
@@ -39,10 +41,17 @@ def load_archive_data():
                 continue
     
     if df is not None:
-        # Nettoyage et typage
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        # --- CORRECTION DU BUG ICI ---
+        # 1. On convertit en date
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
         
-        # On force les colonnes numériques pour éviter les erreurs de type
+        # 2. On supprime le fuseau horaire (tz-naive) pour permettre les comparaisons
+        if pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+            # Si les dates ont un fuseau (tz-aware), on le retire
+            if df['timestamp'].dt.tz is not None:
+                df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+        
+        # 3. Conversion des colonnes numériques
         cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
         for col in cols_num:
             if col in df.columns:
