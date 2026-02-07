@@ -100,36 +100,45 @@ def run_forecasting(df, city):
 
 # --- MAIN APP ---
 def main():
-    # --- DEBUT DU BLOC TEMPORAIRE D'IMPORTATION ---
+    # --- DEBUT DU BLOC TEMPORAIRE D'IMPORTATION (CORRIGÉ) ---
     st.sidebar.header("🛠️ Admin Zone")
     uploaded_file = st.sidebar.file_uploader("Uploader l'historique (CSV)", type=['csv'])
     
     if uploaded_file is not None:
         if st.sidebar.button("Lancer l'importation Cloud"):
-            with st.spinner("Le serveur Streamlit lit le fichier..."):
+            with st.spinner("Le serveur Streamlit lit et nettoie le fichier..."):
                 import pandas as pd
-                import psycopg
-                from sqlalchemy import create_engine
+                from sqlalchemy import create_engine, text
                 
-                # 1. Lecture du fichier uploadé
+                # 1. Lecture du fichier
                 df = pd.read_csv(uploaded_file)
                 
-                # Nettoyage
+                # NETTOYAGE AGRESSIF (La partie importante !)
+                # On supprime l'ID s'il existe
                 if 'id' in df.columns: df = df.drop(columns=['id'])
+                
+                # On convertit la date
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df = df.replace({pd.NA: None, float('nan'): None})
                 
-                st.info(f"Fichier lu : {len(df)} lignes. Envoi vers Neon en cours...")
+                # On FORCE la conversion en nombres pour toutes les colonnes de pollution
+                # errors='coerce' va transformer les erreurs (texte, tirets...) en NaN (vide)
+                cols_to_fix = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
+                for col in cols_to_fix:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
                 
-                # 2. Récupération de la clé secrète (Déjà configurée sur Streamlit Cloud !)
-                # On utilise la connexion directe pour aller plus vite
+                # On remplace les NaN par None pour SQL
+                df = df.replace({float('nan'): None})
+                
+                st.info(f"Fichier nettoyé : {len(df)} lignes. Envoi vers Neon en cours...")
+                
+                # 2. Connexion
                 db_url = st.secrets["POSTGRES_URL"].replace("sslmode=require", "sslmode=require")
                 
                 try:
-                    # On utilise SQLAlchemy pour l'envoi massif
                     engine = create_engine(db_url.replace("postgresql://", "postgresql+psycopg://"))
                     
-                    # Envoi par paquets (Chunking)
+                    # Envoi par paquets de 1000
                     chunk_size = 1000
                     total_chunks = (len(df) // chunk_size) + 1
                     my_bar = st.progress(0)
@@ -139,7 +148,7 @@ def main():
                         batch.to_sql('aqi_data', engine, if_exists='append', index=False, method='multi')
                         my_bar.progress((i + 1) / total_chunks)
                         
-                    st.success("🎉 SUCCÈS ! Tout l'historique est dans la base !")
+                    st.success("🎉 SUCCÈS TOTAL ! Tout l'historique est validé et importé.")
                     st.balloons()
                     
                 except Exception as e:
