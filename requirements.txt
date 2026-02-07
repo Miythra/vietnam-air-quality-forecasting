@@ -27,3 +27,4 @@ pytz
 
 # --- AI & LLM ---
 google-generativeai
+sqlalchemy
