@@ -28,19 +28,27 @@ def get_aqi_color(aqi):
 
 @st.cache_data
 def load_archive_data():
-    """Charge le CSV local pour la partie Analyse/Archive"""
+    """Charge le CSV pour la partie Archive"""
     try:
-        # Assure-toi que le fichier s'appelle bien 'aqi_data.csv' et est à la racine ou dans src
-        df = pd.read_csv('aqi_data.csv') 
+        # On essaie le chemin spécifique que tu as donné
+        # Le script tourne souvent à la racine du projet sur le Cloud
+        df = pd.read_csv('data/aqi_data.csv') 
+        
+        # Nettoyage et conversion
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        # Nettoyage rapide
         cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
         for col in cols_num:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         return df.dropna()
-    except Exception as e:
-        return None
+        
+    except FileNotFoundError:
+        # Si ça ne marche pas, on essaie un autre chemin (au cas où)
+        try:
+            df = pd.read_csv('src/data/aqi_data.csv')
+            return df
+        except:
+            return None
 
 def init_connection():
     """Connexion à NeonDB pour le Live"""
