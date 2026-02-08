@@ -9,19 +9,20 @@ import os
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Vietnam Air Quality AI", page_icon="🇻🇳", layout="wide")
 
-# --- 2. CHARGEMENT ROBUSTE (FIX DATE) ---
+# --- 2. FONCTIONS DE CHARGEMENT ---
+
 @st.cache_data
 def load_archive_data():
     """
-    Charge le CSV et convertit tout en HEURE VIETNAM (UTC+7).
+    Charge le CSV, convertit en HEURE VIETNAM (UTC+7) et nettoie les données.
     """
-    import os
-    
-    # Recherche du fichier
+    # Recherche intelligente du fichier
     current_dir = os.path.dirname(os.path.abspath(__file__))
     possible_paths = [
-        "data/aqi_data.csv", "src/data/aqi_data.csv",
-        os.path.join(current_dir, "aqi_data.csv"), "aqi_data.csv"
+        "data/aqi_data.csv",
+        "src/data/aqi_data.csv",
+        os.path.join(current_dir, "aqi_data.csv"),
+        "aqi_data.csv"
     ]
     
     df = None
@@ -34,17 +35,15 @@ def load_archive_data():
                 continue
     
     if df is not None:
-        # --- CONVERSION TEMPORELLE VIETNAM ---
-        # 1. On lit en UTC (Universel)
+        # --- GESTION TEMPORELLE VIETNAM ---
+        # 1. Lire en UTC
         df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
-        
-        # 2. On convertit en heure locale du Vietnam (Asia/Ho_Chi_Minh)
+        # 2. Convertir en heure locale (Vietnam)
         df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Ho_Chi_Minh')
-        
-        # 3. On enlève l'info de fuseau pour le graphique (mais l'heure reste celle du Vietnam !)
+        # 3. Retirer le fuseau pour l'affichage (rend la date "naïve")
         df['timestamp'] = df['timestamp'].dt.tz_localize(None)
         
-        # Conversion chiffres
+        # Nettoyage colonnes numériques
         cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
         for col in cols_num:
             if col in df.columns:
@@ -62,6 +61,7 @@ def init_connection():
 
 def load_live_data(conn):
     try:
+        # On charge les données fraîches
         return conn.query('SELECT * FROM aqi_data ORDER BY timestamp DESC LIMIT 500;', ttl="10m")
     except:
         return pd.DataFrame()
@@ -77,62 +77,50 @@ def get_aqi_color(aqi):
 # --- 3. INTERFACE ---
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Aller vers :", ["📊 Archives & Performance IA", "🔴 Live Data (Temps Réel)"])
+st.sidebar.markdown("---")
+st.sidebar.info("Projet : Vietnam Air Quality Forecasting")
 
 # ==============================================================================
-# ONGLET 1 : ARCHIVES (CORRIGÉ)
+# ONGLET 1 : ARCHIVES & IA
 # ==============================================================================
 if page == "📊 Archives & Performance IA":
-    st.title("🧠 Performance du Modèle")
+    st.title("🧠 Performance du Modèle (Archives)")
+    st.markdown("Analyse basée sur l'historique CSV (Heure Locale Vietnam).")
     
     df = load_archive_data()
 
     if df is not None:
-        # Sélecteurs
+        # Filtres
         col1, col2 = st.columns(2)
         with col1:
             locations = sorted(df['location'].unique())
             selected_location = st.selectbox("📍 Ville", locations)
-            # Filtre les données pour cette ville
             df_loc = df[df['location'] == selected_location]
         
         with col2:
-            # Récupère min et max
             min_date = df_loc['timestamp'].min().date()
             max_date = df_loc['timestamp'].max().date()
-            
-            # Sélecteur de date sécurisé
-            try:
-                test_date = st.date_input("📅 Date à prédire", max_date, min_value=min_date, max_value=max_date)
-            except:
-                st.warning("Plage de dates invalide, utilisation de la date max.")
-                test_date = max_date
+            test_date = st.date_input("📅 Date à prédire", max_date, min_value=min_date, max_value=max_date)
 
-        # --- LOGIQUE INTELLIGENTE DE DÉCOUPE ---
+        # --- DÉCOUPE DES DONNÉES (Fix "Pas assez de données") ---
         split_ts = pd.Timestamp(test_date)
         
-        # 1. Essai Standard : On coupe à minuit (Passé vs Jour J)
+        # 1. Tentative Standard (Jours d'avant vs Jour J)
         train_df = df_loc[df_loc['timestamp'] < split_ts]
         test_df = df_loc[df_loc['timestamp'].dt.date == test_date]
         
-        mode_msg = "Mode Standard (Jours précédents vs Jour J)"
-
-        # 2. PLAN B (Si pas assez de passé) : On coupe la journée en 2 (Matin vs Soir)
-        # C'est ce qui va sauver ton affichage si tu n'as qu'un jour de données !
+        # 2. Mode Secours (Si fichier ne contient qu'un seul jour)
         if len(train_df) < 10:
-            mode_msg = "⚠️ Mode 'Jour Unique' : Coupure 80% (Entraînement) / 20% (Test)"
-            # On prend toutes les données du jour choisi
+            # On coupe la journée en deux : 80% matin (Train) / 20% soir (Test)
             day_data = df_loc[df_loc['timestamp'].dt.date == test_date].sort_values('timestamp')
-            
             if len(day_data) > 5:
-                split_idx = int(len(day_data) * 0.8) # 80% pour apprendre
+                split_idx = int(len(day_data) * 0.8)
                 train_df = day_data.iloc[:split_idx]
                 test_df = day_data.iloc[split_idx:]
-            else:
-                train_df = pd.DataFrame() # Vraiment pas assez de données
+                st.warning("⚠️ Mode 'Données limitées' : Entraînement sur le début de journée, test sur la fin.")
 
-        # --- ENTRAÎNEMENT ---
+        # --- IA & RÉSULTATS ---
         if len(train_df) > 5 and len(test_df) > 0:
-            st.info(f"ℹ️ {mode_msg} | Entraînement sur {len(train_df)} lignes.")
             
             features = ['pm25', 'no2', 'so2', 'co', 'o3']
             features = [f for f in features if f in df.columns]
@@ -142,32 +130,31 @@ if page == "📊 Archives & Performance IA":
             X_test = test_df[features]
             y_test = test_df['aqi']
 
+            # Random Forest
             model = RandomForestRegressor(n_estimators=50, random_state=42)
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
 
-            # --- RÉSULTATS ---
             r2 = r2_score(y_test, y_pred)
             mae = mean_absolute_error(y_test, y_pred)
 
             kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("Date", str(test_date))
+            kpi1.metric("Lignes d'entraînement", len(train_df))
             kpi2.metric("Précision (R²)", f"{r2:.2f}")
             kpi3.metric("Erreur (MAE)", f"{mae:.1f}")
 
             # Graphique
-            st.subheader("📉 Réalité vs Prédiction")
+            st.subheader(f"📉 Évolution à {selected_location}")
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=test_df['timestamp'], y=y_test, mode='lines+markers', name='Réalité'))
             fig.add_trace(go.Scatter(x=test_df['timestamp'], y=y_pred, mode='lines', name='Prédiction IA', line=dict(dash='dot')))
             st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.error("❌ Données insuffisantes pour cette ville à cette date (même en mode secours).")
-            st.write(f"Lignes trouvées : {len(df_loc)}")
+            st.error("❌ Pas assez de données pour cette date et ce lieu.")
 
     else:
-        st.error("Fichier CSV introuvable.")
+        st.error("Fichier CSV introuvable (Vérifiez le dossier 'data').")
 
 # ==============================================================================
 # ONGLET 2 : LIVE DATA
@@ -175,12 +162,33 @@ if page == "📊 Archives & Performance IA":
 elif page == "🔴 Live Data (Temps Réel)":
     st.title("📡 Monitoring NeonDB")
     conn = init_connection()
+    
     if conn:
         df_live = load_live_data(conn)
         if not df_live.empty:
-            df_live['timestamp'] = pd.to_datetime(df_live['timestamp'])
-            st.success(f"Dernière donnée : {df_live['timestamp'].max()}")
-            st.dataframe(df_live.head(50), use_container_width=True)
+            # Conversion UTC -> Vietnam pour l'affichage Live aussi
+            df_live['timestamp'] = pd.to_datetime(df_live['timestamp'], utc=True)
+            df_live['timestamp'] = df_live['timestamp'].dt.tz_convert('Asia/Ho_Chi_Minh').dt.tz_localize(None)
+            
+            latest_time = df_live['timestamp'].max()
+            st.success(f"Dernière mise à jour (Heure Vietnam) : {latest_time}")
+            
+            # KPIs
+            latest_data = df_live.sort_values('timestamp', ascending=False).drop_duplicates('location').head(4)
+            cols = st.columns(len(latest_data))
+            for idx, row in enumerate(latest_data.itertuples()):
+                with cols[idx]:
+                    try:
+                        color = get_aqi_color(row.aqi)
+                        st.markdown(f"""
+                        <div style="background-color: {color}; padding: 10px; border-radius: 10px; text-align: center;">
+                            <h3>{row.location}</h3>
+                            <h1>{int(row.aqi)}</h1>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    except: pass
+            
+            st.dataframe(df_live, use_container_width=True)
             if st.button("Actualiser"): st.rerun()
         else:
-            st.info("Base de données connectée mais vide.")
+            st.info("Base de données connectée. En attente des données du Scraper...")
