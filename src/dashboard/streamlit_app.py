@@ -1,33 +1,26 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
+import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 import os
 
-# --- 1. CONFIGURATION DE LA PAGE ---
-st.set_page_config(
-    page_title="Vietnam Air Quality AI",
-    page_icon="🇻🇳",
-    layout="wide"
-)
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="Vietnam Air Quality AI", page_icon="🇻🇳", layout="wide")
 
-# --- 2. FONCTIONS DE CHARGEMENT (ROBUSTES) ---
-
+# --- 2. CHARGEMENT ROBUSTE (FIX DATE) ---
 @st.cache_data
 def load_archive_data():
     """
-    Charge le CSV et supprime les fuseaux horaires pour éviter les bugs de comparaison.
+    Charge le CSV et neutralise les fuseaux horaires (UTC) pour éviter les crashs.
     """
-    import os
-    
-    # Recherche du fichier
+    # Recherche du fichier (Mode Détective)
     current_dir = os.path.dirname(os.path.abspath(__file__))
     possible_paths = [
         "data/aqi_data.csv",
-        os.path.join(current_dir, "aqi_data.csv"),
         "src/data/aqi_data.csv",
+        os.path.join(current_dir, "aqi_data.csv"),
         "aqi_data.csv"
     ]
     
@@ -41,201 +34,149 @@ def load_archive_data():
                 continue
     
     if df is not None:
-        # --- CORRECTION DU BUG ICI ---
-        # 1. On convertit en date
-        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        # --- NETTOYAGE DES DATES (LE FIX EST ICI) ---
+        # 1. On force tout en datetime UTC
+        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+        # 2. On supprime l'info de fuseau horaire pour rendre la date "naïve" et comparable
+        df['timestamp'] = df['timestamp'].dt.tz_localize(None)
         
-        # 2. On supprime le fuseau horaire (tz-naive) pour permettre les comparaisons
-        if pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-            # Si les dates ont un fuseau (tz-aware), on le retire
-            if df['timestamp'].dt.tz is not None:
-                df['timestamp'] = df['timestamp'].dt.tz_localize(None)
-        
-        # 3. Conversion des colonnes numériques
+        # Nettoyage colonnes numériques
         cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
         for col in cols_num:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        return df.dropna()
+        return df.dropna().sort_values('timestamp')
     else:
         return None
 
 def init_connection():
-    """Connexion à NeonDB via st.connection"""
     try:
-        # Utilise les secrets configurés dans Streamlit Cloud
         return st.connection("postgresql", type="sql")
-    except Exception as e:
+    except:
         return None
 
 def load_live_data(conn):
-    """Récupère les 1000 dernières lignes de la base de données"""
     try:
-        return conn.query('SELECT * FROM aqi_data ORDER BY timestamp DESC LIMIT 1000;', ttl="10m")
+        return conn.query('SELECT * FROM aqi_data ORDER BY timestamp DESC LIMIT 500;', ttl="10m")
     except:
         return pd.DataFrame()
 
 def get_aqi_color(aqi):
-    """Retourne la couleur officielle de l'AQI"""
-    if aqi <= 50: return "#00E400"  # Vert
-    elif aqi <= 100: return "#FFFF00" # Jaune
-    elif aqi <= 150: return "#FF7E00" # Orange
-    elif aqi <= 200: return "#FF0000" # Rouge
-    elif aqi <= 300: return "#8F3F97" # Violet
-    else: return "#7E0023" # Marron
+    if aqi <= 50: return "#00E400"
+    elif aqi <= 100: return "#FFFF00"
+    elif aqi <= 150: return "#FF7E00"
+    elif aqi <= 200: return "#FF0000"
+    elif aqi <= 300: return "#8F3F97"
+    else: return "#7E0023"
 
-# --- 3. INTERFACE PRINCIPALE ---
-
-st.sidebar.title("🔍 Navigation")
+# --- 3. INTERFACE ---
+st.sidebar.title("Navigation")
 page = st.sidebar.radio("Aller vers :", ["📊 Archives & Performance IA", "🔴 Live Data (Temps Réel)"])
 
-st.sidebar.markdown("---")
-st.sidebar.info("Projet : Vietnam Air Quality Forecasting")
-
 # ==============================================================================
-# ONGLET 1 : ARCHIVES & IA (Le Labo)
+# ONGLET 1 : ARCHIVES (CORRIGÉ)
 # ==============================================================================
 if page == "📊 Archives & Performance IA":
-    st.title("🧠 Analyse de Performance du Modèle")
-    st.markdown("""
-    Cette section utilise les **données historiques** pour évaluer la précision de l'IA.
-    Nous simulons des prédictions passées pour comparer la théorie (IA) et la réalité (Capteurs).
-    """)
-
+    st.title("🧠 Performance du Modèle")
+    
     df = load_archive_data()
 
     if df is not None:
-        # --- A. Filtres ---
+        # Sélecteurs
         col1, col2 = st.columns(2)
         with col1:
             locations = sorted(df['location'].unique())
-            selected_location = st.selectbox("📍 Choisir une ville", locations)
-        
-        # Filtrer les données pour la ville choisie
-        df_loc = df[df['location'] == selected_location].sort_values('timestamp')
+            selected_location = st.selectbox("📍 Ville", locations)
+            # Filtre les données pour cette ville
+            df_loc = df[df['location'] == selected_location]
         
         with col2:
+            # Récupère min et max
             min_date = df_loc['timestamp'].min().date()
             max_date = df_loc['timestamp'].max().date()
-            test_date = st.date_input("📅 Date à prédire (Test)", max_date, min_value=min_date, max_value=max_date)
+            
+            # Sélecteur de date sécurisé
+            try:
+                test_date = st.date_input("📅 Date à prédire", max_date, min_value=min_date, max_value=max_date)
+            except:
+                st.warning("Plage de dates invalide, utilisation de la date max.")
+                test_date = max_date
 
-        # --- B. Entraînement IA ---
-        # On coupe : Tout ce qui est AVANT la date choisie sert à apprendre
-        split_date = pd.Timestamp(test_date)
-        train_df = df_loc[df_loc['timestamp'] < split_date]
-        test_df = df_loc[df_loc['timestamp'].dt.date == split_date]
+        # --- LOGIQUE INTELLIGENTE DE DÉCOUPE ---
+        split_ts = pd.Timestamp(test_date)
+        
+        # 1. Essai Standard : On coupe à minuit (Passé vs Jour J)
+        train_df = df_loc[df_loc['timestamp'] < split_ts]
+        test_df = df_loc[df_loc['timestamp'].dt.date == test_date]
+        
+        mode_msg = "Mode Standard (Jours précédents vs Jour J)"
 
-        if len(train_df) > 50 and len(test_df) > 0:
-            with st.spinner('L\'IA analyse le passé et s\'entraîne...'):
-                features = ['pm25', 'no2', 'so2', 'co', 'o3']
-                # Vérification des colonnes disponibles
-                features = [f for f in features if f in df.columns]
-                
-                X_train = train_df[features]
-                y_train = train_df['aqi']
-                X_test = test_df[features]
-                y_test = test_df['aqi']
+        # 2. PLAN B (Si pas assez de passé) : On coupe la journée en 2 (Matin vs Soir)
+        # C'est ce qui va sauver ton affichage si tu n'as qu'un jour de données !
+        if len(train_df) < 10:
+            mode_msg = "⚠️ Mode 'Jour Unique' : Coupure 80% (Entraînement) / 20% (Test)"
+            # On prend toutes les données du jour choisi
+            day_data = df_loc[df_loc['timestamp'].dt.date == test_date].sort_values('timestamp')
+            
+            if len(day_data) > 5:
+                split_idx = int(len(day_data) * 0.8) # 80% pour apprendre
+                train_df = day_data.iloc[:split_idx]
+                test_df = day_data.iloc[split_idx:]
+            else:
+                train_df = pd.DataFrame() # Vraiment pas assez de données
 
-                # Création et entraînement du modèle Random Forest
-                model = RandomForestRegressor(n_estimators=50, random_state=42)
-                model.fit(X_train, y_train)
-                
-                # Prédiction
-                y_pred = model.predict(X_test)
+        # --- ENTRAÎNEMENT ---
+        if len(train_df) > 5 and len(test_df) > 0:
+            st.info(f"ℹ️ {mode_msg} | Entraînement sur {len(train_df)} lignes.")
+            
+            features = ['pm25', 'no2', 'so2', 'co', 'o3']
+            features = [f for f in features if f in df.columns]
+            
+            X_train = train_df[features]
+            y_train = train_df['aqi']
+            X_test = test_df[features]
+            y_test = test_df['aqi']
 
-            # --- C. Résultats ---
+            model = RandomForestRegressor(n_estimators=50, random_state=42)
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+
+            # --- RÉSULTATS ---
             r2 = r2_score(y_test, y_pred)
             mae = mean_absolute_error(y_test, y_pred)
 
-            st.markdown("### 🎯 Résultats de la simulation")
             kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("Date Analysée", str(test_date))
-            kpi2.metric("Précision (R²)", f"{r2:.2f}", help="Plus proche de 1 est mieux")
-            kpi3.metric("Erreur Moyenne (MAE)", f"{mae:.1f}", help="Écart moyen entre prédiction et réalité")
+            kpi1.metric("Date", str(test_date))
+            kpi2.metric("Précision (R²)", f"{r2:.2f}")
+            kpi3.metric("Erreur (MAE)", f"{mae:.1f}")
 
-            # Graphique Interactif
-            st.subheader(f"📉 Comparatif : Réalité vs Prédiction à {selected_location}")
+            # Graphique
+            st.subheader("📉 Réalité vs Prédiction")
             fig = go.Figure()
-            
-            # Courbe Réalité
-            fig.add_trace(go.Scatter(
-                x=test_df['timestamp'], y=y_test,
-                mode='lines+markers', name='Réalité (Mesuré)',
-                line=dict(color='#1f77b4', width=3)
-            ))
-            
-            # Courbe Prédiction
-            fig.add_trace(go.Scatter(
-                x=test_df['timestamp'], y=y_pred,
-                mode='lines', name='Prédiction IA',
-                line=dict(color='#ff7f0e', width=3, dash='dot')
-            ))
-            
-            fig.update_layout(xaxis_title="Heure", yaxis_title="AQI (Indice Qualité Air)", hovermode="x unified")
+            fig.add_trace(go.Scatter(x=test_df['timestamp'], y=y_test, mode='lines+markers', name='Réalité'))
+            fig.add_trace(go.Scatter(x=test_df['timestamp'], y=y_pred, mode='lines', name='Prédiction IA', line=dict(dash='dot')))
             st.plotly_chart(fig, use_container_width=True)
             
-            # Importance des variables
-            with st.expander("Voir les polluants les plus influents"):
-                importance = pd.DataFrame({
-                    'Polluant': features,
-                    'Importance': model.feature_importances_
-                }).sort_values(by='Importance', ascending=True)
-                fig_imp = px.bar(importance, x='Importance', y='Polluant', orientation='h')
-                st.plotly_chart(fig_imp)
-
         else:
-            st.warning("⚠️ Pas assez de données historiques AVANT cette date pour entraîner l'IA. Essayez une date plus récente.")
-    
+            st.error("❌ Données insuffisantes pour cette ville à cette date (même en mode secours).")
+            st.write(f"Lignes trouvées : {len(df_loc)}")
+
     else:
-        st.error("❌ Le fichier CSV est introuvable malgré la recherche automatique.")
+        st.error("Fichier CSV introuvable.")
 
 # ==============================================================================
-# ONGLET 2 : LIVE DATA (NeonDB)
+# ONGLET 2 : LIVE DATA
 # ==============================================================================
 elif page == "🔴 Live Data (Temps Réel)":
-    st.title("📡 Monitoring Temps Réel (NeonDB)")
-    st.markdown("Données en direct depuis la base de données Cloud.")
-    
+    st.title("📡 Monitoring NeonDB")
     conn = init_connection()
-    
     if conn:
         df_live = load_live_data(conn)
-        
         if not df_live.empty:
-            # Traitement des dates
             df_live['timestamp'] = pd.to_datetime(df_live['timestamp'])
-            latest_time = df_live['timestamp'].max()
-            
-            st.success(f"✅ Dernière donnée reçue : {latest_time}")
-            
-            # Affichage des 4 villes principales (KPIs)
-            st.subheader("🌍 Situation Actuelle")
-            latest_data = df_live.sort_values('timestamp', ascending=False).drop_duplicates('location').head(4)
-            
-            cols = st.columns(len(latest_data))
-            for idx, row in enumerate(latest_data.itertuples()):
-                with cols[idx]:
-                    try:
-                        val_aqi = int(row.aqi)
-                        color = get_aqi_color(val_aqi)
-                        st.markdown(f"""
-                            <div style="background-color: {color}; padding: 15px; border-radius: 10px; text-align: center; color: black;">
-                                <h3 style="margin:0">{row.location}</h3>
-                                <h1 style="font-size:3em; margin:0">{val_aqi}</h1>
-                                <p style="margin:0">AQI</p>
-                            </div>
-                        """, unsafe_allow_html=True)
-                    except:
-                        st.error(f"Erreur données {row.location}")
-            
-            st.markdown("### 📋 Données Brutes Récentes")
-            st.dataframe(df_live, use_container_width=True)
-            
-            if st.button("🔄 Actualiser les données"):
-                st.rerun()
+            st.success(f"Dernière donnée : {df_live['timestamp'].max()}")
+            st.dataframe(df_live.head(50), use_container_width=True)
+            if st.button("Actualiser"): st.rerun()
         else:
-            st.info("La base de données est connectée mais ne contient pas encore de données récentes.")
-            st.markdown("Le scraper automatique ajoutera les prochaines données à l'heure pile.")
-    else:
-        st.error("❌ Impossible de se connecter à la base de données. Vérifiez les 'Secrets' dans Streamlit.")
+            st.info("Base de données connectée mais vide.")
