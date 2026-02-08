@@ -13,15 +13,15 @@ st.set_page_config(page_title="Vietnam Air Quality AI", page_icon="🇻🇳", la
 @st.cache_data
 def load_archive_data():
     """
-    Charge le CSV et neutralise les fuseaux horaires (UTC) pour éviter les crashs.
+    Charge le CSV et convertit tout en HEURE VIETNAM (UTC+7).
     """
-    # Recherche du fichier (Mode Détective)
+    import os
+    
+    # Recherche du fichier
     current_dir = os.path.dirname(os.path.abspath(__file__))
     possible_paths = [
-        "data/aqi_data.csv",
-        "src/data/aqi_data.csv",
-        os.path.join(current_dir, "aqi_data.csv"),
-        "aqi_data.csv"
+        "data/aqi_data.csv", "src/data/aqi_data.csv",
+        os.path.join(current_dir, "aqi_data.csv"), "aqi_data.csv"
     ]
     
     df = None
@@ -34,13 +34,17 @@ def load_archive_data():
                 continue
     
     if df is not None:
-        # --- NETTOYAGE DES DATES (LE FIX EST ICI) ---
-        # 1. On force tout en datetime UTC
+        # --- CONVERSION TEMPORELLE VIETNAM ---
+        # 1. On lit en UTC (Universel)
         df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
-        # 2. On supprime l'info de fuseau horaire pour rendre la date "naïve" et comparable
+        
+        # 2. On convertit en heure locale du Vietnam (Asia/Ho_Chi_Minh)
+        df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Ho_Chi_Minh')
+        
+        # 3. On enlève l'info de fuseau pour le graphique (mais l'heure reste celle du Vietnam !)
         df['timestamp'] = df['timestamp'].dt.tz_localize(None)
         
-        # Nettoyage colonnes numériques
+        # Conversion chiffres
         cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
         for col in cols_num:
             if col in df.columns:
