@@ -16,7 +16,7 @@ requests
 beautifulsoup4
 
 # --- Database (CRITIQUE) ---
-psycopg2-binary
+psycopg[binary]
 sqlalchemy
 
 # --- Utils ---
