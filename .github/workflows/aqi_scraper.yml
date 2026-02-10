@@ -1,10 +1,8 @@
 name: Hourly AQI Scraper
 
 on:
-  # 1. Automatique : Tous les jours, à la 15ème minute de chaque heure
   schedule:
     - cron: '15 * * * *'
-  # 2. Manuel : Bouton pour lancer le script quand tu veux tester
   workflow_dispatch:
 
 jobs:
@@ -12,28 +10,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Étape A : Récupérer ton code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Étape B : Installer Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # Étape C : Installer les outils
-      # J'ai ajouté la ligne explicite pour psycopg[binary] pour être sûr que ça marche !
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install "psycopg[binary]" sqlalchemy
+          # Sécurité : on force l'install des libs critiques
+          pip install "psycopg[binary]" lxml requests beautifulsoup4
 
-      # Étape D : Lancer le script
       - name: Run ETL Script
         env:
-          # On donne la clé de la base de données au script
           POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
         run: |
           python src/scraping/run_scrape.py
