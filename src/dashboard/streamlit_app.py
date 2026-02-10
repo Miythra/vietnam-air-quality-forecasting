@@ -1,58 +1,41 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
+from sklearn.metrics import mean_absolute_error, r2_score
 import os
 
-# --- CONFIGURATION DE LA PAGE ---
+# --- CONFIGURATION ---
 st.set_page_config(
-    page_title="Vietnam Air Quality AI - Analytics",
-    page_icon="📊",
+    page_title="Vietnam AQI - Maps & Predictions",
+    page_icon="🇻🇳",
     layout="wide"
 )
 
-# --- STYLE CSS PERSONNALISÉ ---
-st.markdown("""
-<style>
-    .metric-card {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #ffffff;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #f0f2f6;
-        border-bottom: 2px solid #ff4b4b;
-    }
-</style>
-""", unsafe_allow_html=True)
+# --- COORDONNÉES DES VILLES (SECOURS) ---
+# Si le CSV n'a pas de lat/lon, on utilise ça pour afficher la carte.
+CITY_COORDS = {
+    "Hanoi": [21.0285, 105.8542],
+    "Ho Chi Minh": [10.8231, 106.6297],
+    "Da Nang": [16.0544, 108.2022],
+    "Hai Phong": [20.8449, 106.6881],
+    "Can Tho": [10.0452, 105.7469],
+    "Nha Trang": [12.2388, 109.1967],
+    "Hue": [16.4637, 107.5909],
+    "Ha Long": [20.9069, 107.0734],
+    "Vung Tau": [10.3460, 107.0843],
+    "Da Lat": [11.9404, 108.4583],
+    "Bien Hoa": [10.9574, 106.8427],
+    "Buon Ma Thuot": [12.6675, 108.0383]
+}
 
 # --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
 def load_data():
-    """Charge et nettoie les données historiques."""
-    # Liste des chemins possibles
-    possible_paths = [
-        "data/aqi_data.csv", "src/data/aqi_data.csv", "aqi_data.csv"
-    ]
-    
+    possible_paths = ["data/aqi_data.csv", "src/data/aqi_data.csv", "aqi_data.csv"]
     df = None
     for path in possible_paths:
         if os.path.exists(path):
@@ -60,202 +43,243 @@ def load_data():
                 df = pd.read_csv(path)
                 break
             except: continue
-            
+    
     if df is not None:
-        # Conversion Date
+        # Dates
         df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
         df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Ho_Chi_Minh').dt.tz_localize(None)
         
-        # Conversion Numérique
+        # Nombres
         cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
         for col in cols_num:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        return df.dropna().sort_values('timestamp')
+        df = df.dropna(subset=['aqi'])
+        
+        # Ajout Lat/Lon si manquant
+        if 'latitude' not in df.columns or 'longitude' not in df.columns:
+            df['latitude'] = df['location'].map(lambda x: CITY_COORDS.get(x, [None, None])[0])
+            df['longitude'] = df['location'].map(lambda x: CITY_COORDS.get(x, [None, None])[1])
+            
+        return df.dropna(subset=['latitude', 'longitude']).sort_values('timestamp')
     return None
 
-# --- ENTRAÎNEMENT DU MODÈLE (CACHÉ) ---
+# --- FONCTION DE PRÉDICTION GLOBALE ---
 @st.cache_resource
-def train_model(df_loc):
-    """Entraîne le modèle et renvoie les résultats pour visualisation."""
-    features = ['pm25', 'no2', 'so2', 'co', 'o3']
-    # Vérification des colonnes existantes
-    features = [f for f in features if f in df_loc.columns]
+def get_predictions_for_map(df, target_timestamp):
+    """
+    Entraîne un modèle pour chaque ville et prédit l'AQI à l'heure demandée.
+    """
+    map_data = []
     
-    if len(df_loc) < 20 or not features:
-        return None, None, None, None, None
+    # On trouve l'heure la plus proche dans les données pour éviter d'être vide
+    # (Tolérance de 1 heure)
+    nearest_time = None
+    min_diff = pd.Timedelta(hours=1)
+    
+    # On filtre d'abord grossièrement pour ne pas chercher dans tout l'historique
+    subset_time = df[(df['timestamp'] >= target_timestamp - pd.Timedelta(hours=2)) & 
+                     (df['timestamp'] <= target_timestamp + pd.Timedelta(hours=2))]
+    
+    if subset_time.empty:
+        return pd.DataFrame(), None
 
-    X = df_loc[features]
-    y = df_loc['aqi']
-    
-    # Split Chronologique (pas aléatoire) pour respecter le temps
-    # On garde les 20% les plus récents pour le test
-    split_idx = int(len(df_loc) * 0.8)
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
-    dates_test = df_loc['timestamp'].iloc[split_idx:]
-    
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    
-    return model, X_test, y_test, y_pred, dates_test
+    # Pour chaque ville présente
+    for city in df['location'].unique():
+        city_df = df[df['location'] == city].sort_values('timestamp')
+        
+        # On entraîne sur tout l'historique de cette ville
+        features = ['pm25', 'no2', 'so2', 'co', 'o3']
+        features = [f for f in features if f in city_df.columns]
+        
+        if len(city_df) > 5 and features:
+            # Récupération de la ligne la plus proche de l'heure cible
+            # On cherche la ligne réelle pour comparer
+            row_closest = city_df.iloc[(city_df['timestamp'] - target_timestamp).abs().argmin()]
+            time_diff = abs(row_closest['timestamp'] - target_timestamp)
+            
+            if time_diff < pd.Timedelta(hours=2): # On accepte max 2h d'écart
+                real_aqi = row_closest['aqi']
+                lat, lon = row_closest['latitude'], row_closest['longitude']
+                
+                # Entraînement Modèle (Rapide)
+                # On exclut la ligne cible du train pour être honnête (ou pas, selon besoin)
+                # Ici on entraîne sur tout sauf la cible pour simuler une prédiction
+                train_data = city_df[city_df['timestamp'] != row_closest['timestamp']]
+                if len(train_data) > 0:
+                    model = RandomForestRegressor(n_estimators=20, random_state=42)
+                    model.fit(train_data[features], train_data['aqi'])
+                    
+                    # Prédiction sur les features de l'heure cible
+                    pred_aqi = model.predict(pd.DataFrame([row_closest[features]]))[0]
+                    
+                    map_data.append({
+                        'location': city,
+                        'lat': lat, 'lon': lon,
+                        'Real AQI': real_aqi,
+                        'Predicted AQI': pred_aqi,
+                        'timestamp': row_closest['timestamp']
+                    })
+                    nearest_time = row_closest['timestamp']
 
-# --- INTERFACE PRINCIPALE ---
-st.title("📊 Analyse Avancée & Performance IA")
-st.markdown("Comparaison interactive entre la **Réalité (Ground Truth)** et les **Prédictions IA** sur les données historiques.")
+    return pd.DataFrame(map_data), nearest_time
+
+# --- SCALE COULEUR AQI ---
+def get_aqi_color_scale():
+    # Vert -> Jaune -> Orange -> Rouge -> Violet -> Marron
+    return [
+        (0, "#00e400"),    # Good
+        (50/500, "#ffff00"),# Moderate
+        (100/500, "#ff7e00"),# Unhealthy for Sensitive
+        (150/500, "#ff0000"),# Unhealthy
+        (200/500, "#8f3f97"),# Very Unhealthy
+        (300/500, "#7e0023"),# Hazardous
+        (1, "#7e0023")
+    ]
+
+# --- INTERFACE ---
+st.title("🇻🇳 Vietnam Air Quality: Reality vs AI Prediction")
+st.markdown("Comparaison spatio-temporelle de la pollution de l'air.")
 
 df = load_data()
 
 if df is not None:
-    # --- SIDEBAR : FILTRES GLOBAUX ---
-    st.sidebar.header("🎛️ Configuration")
+    # --- 1. SÉLECTEUR DE TEMPS (POUR LA CARTE) ---
+    st.sidebar.header("🗺️ Carte Interactive")
     
-    # 1. Choix Ville
-    locations = sorted(df['location'].unique())
-    selected_location = st.sidebar.selectbox("📍 Ville cible", locations)
+    # Slider pour choisir l'heure exacte à afficher sur la carte
+    min_date = df['timestamp'].min().to_pydatetime()
+    max_date = df['timestamp'].max().to_pydatetime()
     
-    # Filtrage Données
-    df_loc = df[df['location'] == selected_location]
-    
-    # 2. Entraînement
-    with st.spinner(f"Entraînement du modèle pour {selected_location}..."):
-        model, X_test, y_test, y_pred, dates_test = train_model(df_loc)
+    selected_time = st.sidebar.slider(
+        "Choisir le moment à visualiser :",
+        min_value=min_date,
+        max_value=max_date,
+        value=max_date,
+        format="DD/MM/YY - HH:mm"
+    )
 
-    if model is not None:
-        # Calcul Métriques
-        mae = mean_absolute_error(y_test, y_pred)
-        r2 = r2_score(y_test, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    # Calcul des données pour la carte
+    map_df, exact_time = get_predictions_for_map(df, pd.Timestamp(selected_time))
+
+    if not map_df.empty:
+        st.info(f"Visualisation des données pour le : **{exact_time}**")
         
-        # --- BLOC KPI (MÉTRIQUES) ---
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Échantillons Testés", len(y_test), border=True)
-        col2.metric("Précision (R²)", f"{r2:.2%}", delta_color="normal" if r2 > 0.7 else "inverse", border=True)
-        col3.metric("Erreur Moyenne (MAE)", f"{mae:.1f}", delta="-Low is good", delta_color="inverse", border=True)
-        col4.metric("RMSE (Erreur Quadratique)", f"{rmse:.1f}", border=True)
+        col_map1, col_map2 = st.columns(2)
+        
+        # MAP GAUCHE : RÉALITÉ
+        with col_map1:
+            st.subheader("🌍 Réalité (Mesurée)")
+            fig_real = px.scatter_mapbox(
+                map_df, lat="lat", lon="lon", size="Real AQI", color="Real AQI",
+                color_continuous_scale=px.colors.cyclical.IceFire, # Ou custom AQI scale
+                range_color=[0, 300],
+                hover_name="location", hover_data={"Real AQI": True, "lat": False, "lon": False},
+                zoom=4.5, center={"lat": 16.0, "lon": 106.0},
+                mapbox_style="carto-positron",
+                title="Vraies mesures"
+            )
+            st.plotly_chart(fig_real, use_container_width=True)
 
-        st.markdown("---")
+        # MAP DROITE : PRÉDICTION
+        with col_map2:
+            st.subheader("🤖 Prédiction IA")
+            fig_pred = px.scatter_mapbox(
+                map_df, lat="lat", lon="lon", size="Predicted AQI", color="Predicted AQI",
+                color_continuous_scale=px.colors.cyclical.IceFire,
+                range_color=[0, 300],
+                hover_name="location", hover_data={"Predicted AQI": True, "lat": False, "lon": False},
+                zoom=4.5, center={"lat": 16.0, "lon": 106.0},
+                mapbox_style="carto-positron",
+                title="Estimations du Modèle"
+            )
+            st.plotly_chart(fig_pred, use_container_width=True)
+    else:
+        st.warning(f"Pas de données trouvées autour de {selected_time}. Essayez de bouger le curseur.")
 
-        # --- ONGLETS DE VISUALISATION ---
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📈 Analyse Temporelle", 
-            "🎯 Précision & Corrélation", 
-            "📉 Analyse des Erreurs",
-            "🧠 Intégration Modèle"
-        ])
+    st.divider()
 
-        # === TAB 1 : SÉRIE TEMPORELLE ===
-        with tab1:
-            st.subheader("Réalité vs Prédiction au fil du temps")
+    # --- 2. GRAPHIQUE TEMPOREL AVANCÉ ---
+    st.header("📈 Analyse Temporelle Détaillée")
+    
+    col_filter1, col_filter2 = st.columns(2)
+    
+    # Sélecteur Ville
+    cities = sorted(df['location'].unique())
+    selected_city = col_filter1.selectbox("📍 Choisir une ville pour l'analyse :", cities)
+    
+    # Sélecteur Plage de Dates
+    date_range = col_filter2.date_input(
+        "📅 Plage de dates :",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date
+    )
+    
+    if len(date_range) == 2:
+        start_d, end_d = date_range
+        # Filtrage
+        mask = (df['location'] == selected_city) & \
+               (df['timestamp'].dt.date >= start_d) & \
+               (df['timestamp'].dt.date <= end_d)
+        df_chart = df[mask]
+        
+        if not df_chart.empty and len(df_chart) > 5:
+            # Entraînement spécifique pour le graphe (pour avoir la courbe de prédiction complète)
+            features = ['pm25', 'no2', 'so2', 'co', 'o3']
+            features = [f for f in features if f in df_chart.columns]
             
-            fig_ts = go.Figure()
-            # Réalité
-            fig_ts.add_trace(go.Scatter(
-                x=dates_test, y=y_test, 
-                mode='lines', name='Réalité (Mesuré)',
-                line=dict(color='#1f77b4', width=2),
-                hovertemplate='%{y:.0f} AQI<extra></extra>'
+            X = df_chart[features]
+            y = df_chart['aqi']
+            
+            # On entraîne sur tout le set visible pour montrer le "fitting" (ajustement)
+            # Ou on fait un split si tu veux montrer la prédiction pure.
+            # Ici, pour visualiser "Réalité vs Prédiction", on montre souvent comment le modèle s'ajuste.
+            model = RandomForestRegressor(n_estimators=50, random_state=42)
+            model.fit(X, y)
+            df_chart['Predicted'] = model.predict(X)
+            
+            # Graphique
+            fig_line = go.Figure()
+            
+            # Zone AQI Background (Gradient visuel)
+            # Astuce : On peut colorer le background, mais c'est chargé.
+            # On va plutôt colorer la ligne ou utiliser des marqueurs.
+            
+            fig_line.add_trace(go.Scatter(
+                x=df_chart['timestamp'], y=df_chart['aqi'],
+                mode='lines+markers', name='Réalité',
+                line=dict(color='#1f77b4', width=3)
             ))
-            # Prédiction
-            fig_ts.add_trace(go.Scatter(
-                x=dates_test, y=y_pred, 
+            
+            fig_line.add_trace(go.Scatter(
+                x=df_chart['timestamp'], y=df_chart['Predicted'],
                 mode='lines', name='Prédiction IA',
-                line=dict(color='#ff7f0e', width=2, dash='dot'),
-                hovertemplate='%{y:.0f} AQI<extra></extra>'
+                line=dict(color='#ff7f0e', width=2, dash='dot')
             ))
             
-            fig_ts.update_layout(
-                hovermode="x unified",
+            fig_line.update_layout(
+                title=f"Evolution AQI à {selected_city}",
                 xaxis_title="Date",
                 yaxis_title="AQI",
-                legend=dict(orientation="h", y=1.1),
+                hovermode="x unified",
                 height=500
             )
-            # Ajout Range Slider
-            fig_ts.update_xaxes(rangeslider_visible=True)
-            st.plotly_chart(fig_ts, use_container_width=True)
-
-        # === TAB 2 : SCATTER PLOT ===
-        with tab2:
-            col_sc1, col_sc2 = st.columns([2, 1])
-            with col_sc1:
-                st.subheader("Nuage de points : Prédit vs Réel")
-                st.caption("Un modèle parfait alignerait tous les points sur la ligne rouge diagonale.")
-                
-                fig_scatter = px.scatter(
-                    x=y_test, y=y_pred, 
-                    labels={'x': 'Valeur Réelle (AQI)', 'y': 'Valeur Prédite (AQI)'},
-                    opacity=0.6,
-                    trendline="ols", # Ligne de tendance
-                    trendline_color_override="red"
-                )
-                # Ligne parfaite y=x
-                fig_scatter.add_shape(
-                    type="line", line=dict(dash='dash', color='grey'),
-                    x0=y_test.min(), y0=y_test.min(),
-                    x1=y_test.max(), y1=y_test.max()
-                )
-                st.plotly_chart(fig_scatter, use_container_width=True)
+            st.plotly_chart(fig_line, use_container_width=True)
             
-            with col_sc2:
-                st.info("""
-                **Comment lire ce graphe ?**
-                * **Sur la ligne grise :** Prédiction parfaite.
-                * **Au-dessus :** L'IA surestime la pollution.
-                * **En-dessous :** L'IA sous-estime la pollution.
-                """)
-
-        # === TAB 3 : ERREURS (RESIDUALS) ===
-        with tab3:
-            st.subheader("Distribution des Erreurs (Résidus)")
+            # Métriques sur la période sélectionnée
+            mae = mean_absolute_error(df_chart['aqi'], df_chart['Predicted'])
+            r2 = r2_score(df_chart['aqi'], df_chart['Predicted'])
             
-            residuals = y_test - y_pred
+            kpi1, kpi2, kpi3 = st.columns(3)
+            kpi1.metric("AQI Max (Période)", int(df_chart['aqi'].max()))
+            kpi2.metric("Précision Modèle (R²)", f"{r2:.2f}")
+            kpi3.metric("Erreur Moyenne", f"{mae:.1f}")
             
-            col_res1, col_res2 = st.columns(2)
-            
-            with col_res1:
-                st.markdown("**1. Histogramme des erreurs**")
-                fig_hist = px.histogram(
-                    residuals, nbins=30, 
-                    labels={'value': 'Erreur (Réel - Prédit)'},
-                    color_discrete_sequence=['#ef553b']
-                )
-                fig_hist.update_layout(showlegend=False)
-                st.plotly_chart(fig_hist, use_container_width=True)
-                
-            with col_res2:
-                st.markdown("**2. Erreur au fil du temps**")
-                fig_res_time = px.scatter(
-                    x=dates_test, y=residuals,
-                    labels={'x': 'Date', 'y': 'Erreur (Residual)'}
-                )
-                # Ligne zéro
-                fig_res_time.add_hline(y=0, line_dash="dash", line_color="green")
-                st.plotly_chart(fig_res_time, use_container_width=True)
-
-        # === TAB 4 : IMPORTANCE DES FEATURES ===
-        with tab4:
-            st.subheader("Qu'est-ce qui influence le plus l'IA ?")
-            
-            # Extraction importance
-            importances = model.feature_importances_
-            feature_names = X_test.columns
-            df_imp = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
-            df_imp = df_imp.sort_values('Importance', ascending=True)
-            
-            fig_imp = px.bar(
-                df_imp, x='Importance', y='Feature', orientation='h',
-                color='Importance', color_continuous_scale='Viridis'
-            )
-            st.plotly_chart(fig_imp, use_container_width=True)
-            
-            st.markdown("""
-            > **Note :** Ce graphique montre quels polluants (PM2.5, NO2, etc.) ont le plus de poids dans la décision de l'IA pour calculer l'AQI global.
-            """)
-
+        else:
+            st.warning("Pas assez de données sur cette période pour afficher le graphique.")
     else:
-        st.warning("Pas assez de données pour entraîner le modèle sur cette ville.")
+        st.info("Veuillez sélectionner une date de début et de fin.")
+
 else:
-    st.error("⚠️ Fichier CSV introuvable. Veuillez vérifier vos données.")
+    st.error("Aucune donnée disponible. Veuillez vérifier le fichier CSV.")
