@@ -153,6 +153,10 @@ if df is not None:
     
     # --- BLOC MAP ---
     st.subheader("🗺️ Situation Géographique (Moyennes du dernier jour)")
+    st.markdown("""
+    Cette carte affiche la qualité de l'air moyenne observée sur la dernière journée disponible.
+    Elle met en évidence votre ville cible (🎯), ainsi que les villes les plus propres (✅) et les plus polluées (❌) du Vietnam.
+    """)
     
     latest_date = df['timestamp'].max().date()
     df_recent = df[df['timestamp'].dt.date == latest_date]
@@ -234,7 +238,11 @@ if df is not None:
 
         tab1, tab2, tab3, tab4 = st.tabs(["📈 Analyse Temporelle", "🎯 Précision & Corrélation", "📉 Analyse des Erreurs", "🧠 Intégration Modèle"])
 
+        # === TAB 1 ===
         with tab1:
+            st.subheader("Comparaison Temporelle")
+            st.info("ℹ️ **Comment lire ce graphe :** La ligne bleue représente ce qui s'est réellement passé. La ligne pointillée orange est ce que l'IA avait prédit. Si les deux courbes se superposent, le modèle est performant.")
+            
             fig_ts = go.Figure()
             fig_ts.add_trace(go.Scatter(x=dates_test, y=y_test, mode='lines', name='Réalité', line=dict(color='#1f77b4', width=2)))
             fig_ts.add_trace(go.Scatter(x=dates_test, y=y_pred, mode='lines', name='Prédiction IA', line=dict(color='#ff7f0e', width=2, dash='dot')))
@@ -242,28 +250,50 @@ if df is not None:
             fig_ts.update_xaxes(rangeslider_visible=True)
             st.plotly_chart(fig_ts, use_container_width=True)
 
+        # === TAB 2 ===
         with tab2:
+            st.subheader("Justesse des Prédictions")
+            
             col_sc1, col_sc2 = st.columns([2, 1])
             with col_sc1:
-                fig_scatter = px.scatter(x=y_test, y=y_pred, labels={'x': 'Réalité', 'y': 'Prédiction'}, opacity=0.6, trendline="ols", trendline_color_override="red")
+                fig_scatter = px.scatter(x=y_test, y=y_pred, labels={'x': 'Réalité (AQI)', 'y': 'Prédiction (AQI)'}, opacity=0.6, trendline="ols", trendline_color_override="red")
                 fig_scatter.add_shape(type="line", line=dict(dash='dash', color='grey'), x0=y_test.min(), y0=y_test.min(), x1=y_test.max(), y1=y_test.max())
                 st.plotly_chart(fig_scatter, use_container_width=True)
             with col_sc2:
-                st.info("Alignement parfait = Ligne grise.")
+                st.info("""
+                ℹ️ **Comprendre ce nuage de points :**
+                
+                * **Ligne grise en diagonale :** C'est la perfection (Réalité = Prédiction).
+                * **Points au-dessus :** L'IA est trop pessimiste (elle prédit plus de pollution qu'il n'y en a).
+                * **Points en-dessous :** L'IA est trop optimiste.
+                
+                *Plus les points sont serrés autour de la ligne grise, plus le modèle est fiable.*
+                """)
 
+        # === TAB 3 ===
         with tab3:
+            st.subheader("Analyse des Résidus (Erreurs)")
             residuals = y_test - y_pred
+            
             col_res1, col_res2 = st.columns(2)
             with col_res1:
-                fig_hist = px.histogram(residuals, nbins=30, labels={'value': 'Erreur'}, color_discrete_sequence=['#ef553b'])
+                st.markdown("**1. Répartition des erreurs**")
+                st.caption("On cherche une forme de 'cloche' centrée sur 0. Cela veut dire que l'IA fait autant de petites erreurs positives que négatives (bruit normal).")
+                fig_hist = px.histogram(residuals, nbins=30, labels={'value': 'Erreur (Réel - Prédit)'}, color_discrete_sequence=['#ef553b'])
                 fig_hist.update_layout(showlegend=False)
                 st.plotly_chart(fig_hist, use_container_width=True)
             with col_res2:
+                st.markdown("**2. Erreurs dans le temps**")
+                st.caption("Si vous voyez des motifs (vagues, lignes), c'est que l'IA rate un phénomène cyclique (ex: heure de pointe).")
                 fig_res_time = px.scatter(x=dates_test, y=residuals, labels={'x': 'Date', 'y': 'Erreur'})
                 fig_res_time.add_hline(y=0, line_dash="dash", line_color="green")
                 st.plotly_chart(fig_res_time, use_container_width=True)
 
+        # === TAB 4 ===
         with tab4:
+            st.subheader("Explicabilité du Modèle (Feature Importance)")
+            st.info("ℹ️ **Le cerveau de l'IA :** Ce graphique montre quels polluants influencent le plus la décision de l'IA. Si le PM2.5 a la barre la plus longue, c'est que l'IA se base principalement sur les particules fines pour calculer l'indice AQI.")
+            
             importances = model.feature_importances_
             df_imp = pd.DataFrame({'Feature': X_test.columns, 'Importance': importances}).sort_values('Importance', ascending=True)
             fig_imp = px.bar(df_imp, x='Importance', y='Feature', orientation='h', color='Importance', color_continuous_scale='Viridis')
