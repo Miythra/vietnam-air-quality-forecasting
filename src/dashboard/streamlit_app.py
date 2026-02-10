@@ -14,24 +14,51 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- COORDONNÉES GPS DES VILLES (Pour la map) ---
-# C'est ici que la correspondance doit être parfaite avec ton CSV
+# --- COORDONNÉES GPS COMPLÈTES (Basées sur ton CSV) ---
 CITY_COORDS = {
     "Hanoi": [21.0285, 105.8542],
+    "Ha Noi": [21.0285, 105.8542],
     "Ho Chi Minh": [10.8231, 106.6297],
     "Da Nang": [16.0544, 108.2022],
     "Hai Phong": [20.8449, 106.6881],
     "Can Tho": [10.0452, 105.7469],
-    "Nha Trang": [12.2388, 109.1967],
-    "Hue": [16.4637, 107.5909],
-    "Ha Long": [20.9069, 107.0734],
-    "Vung Tau": [10.3460, 107.0843],
-    "Da Lat": [11.9404, 108.4583],
-    "Bien Hoa": [10.9574, 106.8427],
-    "Buon Ma Thuot": [12.6675, 108.0383],
+    "Ba Ria Vung Tau": [10.4114, 107.1362],
     "Bac Giang": [21.2731, 106.1946],
     "Bac Ninh": [21.1861, 106.0763],
-    "Thai Nguyen": [21.5942, 105.8482]
+    "Binh Dinh": [13.7820, 109.2192],
+    "Binh Duong": [10.9805, 106.6519],
+    "Cao Bang": [22.6667, 106.2500],
+    "Gia Lai": [13.9833, 108.0000],
+    "Ha Nam": [20.5453, 105.9122],
+    "Ha Nam Province": [20.5453, 105.9122],
+    "Hai Duong": [20.9333, 106.3167],
+    "Hung Yen": [20.6464, 106.0511],
+    "Hoa Binh Province": [20.8133, 105.3383],
+    "Khanh Hoa": [12.2388, 109.1967],
+    "Lam Dong": [11.9404, 108.4583],
+    "Lang Son": [21.8533, 106.7583],
+    "Lang Son Province": [21.8533, 106.7583],
+    "Lao Cai": [22.4833, 103.9667],
+    "Long An": [10.5333, 106.4167],
+    "Nghe An": [18.6667, 105.6667],
+    "Ninh Binh": [20.2539, 105.9750],
+    "Ninh Thuan": [11.5667, 108.9833],
+    "Phu Tho": [21.3000, 105.4000],
+    "Quang Binh Province": [17.4833, 106.6000],
+    "Quang Nam": [15.5667, 108.4833],
+    "Quang Ngai": [15.1167, 108.8000],
+    "Quang Ninh": [20.9500, 107.0833],
+    "Quang Ninh Province": [20.9500, 107.0833],
+    "Quang Tri": [16.8000, 107.1000],
+    "Son La": [21.3167, 103.9000],
+    "Tay Ninh": [11.3000, 106.1167],
+    "Thai Binh": [20.4500, 106.3333],
+    "Thai Binh Province": [20.4500, 106.3333],
+    "Thua Thien Hue": [16.4637, 107.5909],
+    "Tra Vinh": [9.9333, 106.3333],
+    "Tuyen Quang Province": [21.8167, 105.2167],
+    "Vinh Long": [10.2500, 105.9667],
+    "Vinh Phuc": [21.3000, 105.6000]
 }
 
 # --- STYLE CSS ---
@@ -120,13 +147,6 @@ st.title("📊 Analyse Avancée & Performance IA")
 df = load_data()
 
 if df is not None:
-    # --- 🚨 ZONE DE DIAGNOSTIC (TEMPORAIRE) ---
-    st.info("👇 Copiez la liste ci-dessous et donnez-la moi pour corriger la carte :")
-    st.write("### 🔍 DEBUG : Liste des villes trouvées dans le fichier")
-    st.write(df['location'].unique())
-    st.divider()
-    # ------------------------------------------
-
     st.sidebar.header("🎛️ Configuration")
     locations = sorted(df['location'].unique())
     selected_location = st.sidebar.selectbox("📍 Ville cible", locations)
