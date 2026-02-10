@@ -126,91 +126,97 @@ if df is not None:
     
     # --- 1. GEOGRAPHICAL OVERVIEW ---
     st.subheader("1. Geographical Overview & Situation")
-    st.markdown("""
-    <div class="explanation-box">
-    <b>What are we looking at?</b><br>
-    This map benchmarks your <b>Target City</b> against the cleanest (✅) and most polluted (❌) cities in Vietnam 
-    for the specific date selected below.
-    </div>
-    """, unsafe_allow_html=True)
     
-    # --- DATE SLIDER ---
+    # --- DATE SLIDER (Full Width) ---
     min_date = df['timestamp'].min().date()
     max_date = df['timestamp'].max().date()
+    selected_date = st.slider(
+        "📅 Timeline Control: Slide to select a date",
+        min_value=min_date, max_value=max_date, value=max_date, format="DD/MM/YYYY"
+    )
     
-    col_date, col_dummy = st.columns([2, 1])
-    with col_date:
-        selected_date = st.slider(
-            "📅 Timeline Control: Slide to select a date",
-            min_value=min_date,
-            max_value=max_date,
-            value=max_date,
-            format="DD/MM/YYYY"
-        )
-    
-    # Filter by date
+    # Filter data
     df_day = df[df['timestamp'].dt.date == selected_date]
+
+    # --- LAYOUT: LEFT (Metrics) | RIGHT (Vertical Map) ---
+    col_left, col_right = st.columns([1, 2]) # Ratio 1:2 to give more space to the map
     
     if not df_day.empty:
         daily_stats = df_day.groupby('location')['aqi'].mean().reset_index()
         
-        # Check if target city has data for this day
         if selected_location in daily_stats['location'].values:
             row_target = daily_stats[daily_stats['location'] == selected_location]
             target_aqi = int(row_target.iloc[0]['aqi'])
+            target_color = get_aqi_color(target_aqi)
         else:
-            row_target = pd.DataFrame() # Empty
+            row_target = pd.DataFrame()
             target_aqi = "N/A"
+            target_color = "#grey"
 
         row_best = daily_stats.loc[daily_stats['aqi'].idxmin()]
         row_worst = daily_stats.loc[daily_stats['aqi'].idxmax()]
         
-        map_points = []
-        
-        def add_point(row, label_type):
-            lat, lon = CITY_COORDS.get(row['location'], [None, None])
-            if lat:
-                map_points.append({
-                    'location': row['location'],
-                    'aqi': int(row['aqi']),
-                    'lat': lat, 'lon': lon,
-                    'type': label_type,
-                    'size': 15 if label_type == 'Target' else 10,
-                    'color': get_aqi_color(row['aqi'])
-                })
+        # --- LEFT COLUMN: INDICATORS ---
+        with col_left:
+            st.markdown("""
+            <div class="explanation-box">
+            <b>What are we looking at?</b><br>
+            This map benchmarks your <b>Target City</b> against the cleanest (✅) and most polluted (❌) cities in Vietnam 
+            for the specific date selected.
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("### 📊 Key Indicators")
+            st.markdown("---")
+            
+            st.metric(f"📍 {selected_location}", f"{target_aqi} AQI", "Target City")
+            st.markdown("---")
+            st.metric(f"✅ Cleanest: {row_best['location']}", f"{int(row_best['aqi'])} AQI", "Best in Vietnam")
+            st.markdown("---")
+            st.metric(f"❌ Highest: {row_worst['location']}", f"{int(row_worst['aqi'])} AQI", "Worst in Vietnam", delta_color="inverse")
 
-        # Logic for points
-        if not row_target.empty: add_point(row_target.iloc[0], 'Target City')
-        if row_best['location'] != selected_location: add_point(row_best, 'Best AQI')
-        if row_worst['location'] != selected_location: add_point(row_worst, 'Worst AQI')
-        
-        # Add background dots
-        for idx, row in daily_stats.iterrows():
-            if row['location'] not in [selected_location, row_best['location'], row_worst['location']]:
+        # --- RIGHT COLUMN: VERTICAL MAP ---
+        with col_right:
+            map_points = []
+            def add_point(row, label_type):
                 lat, lon = CITY_COORDS.get(row['location'], [None, None])
                 if lat:
-                    map_points.append({'location': row['location'], 'aqi': int(row['aqi']), 'lat': lat, 'lon': lon, 'type': 'Others', 'size': 6, 'color': 'grey'})
+                    map_points.append({
+                        'location': row['location'], 'aqi': int(row['aqi']),
+                        'lat': lat, 'lon': lon, 'type': label_type,
+                        'size': 20 if label_type == 'Target' else 15, # Bigger dots
+                        'color': get_aqi_color(row['aqi'])
+                    })
 
-        df_map = pd.DataFrame(map_points)
-        
-        if not df_map.empty:
-            fig_map = px.scatter_mapbox(
-                df_map, lat="lat", lon="lon", color="type", size="size",
-                hover_name="location", hover_data={"aqi": True, "lat": False, "lon": False, "size": False},
-                zoom=5, center={"lat": 16.0, "lon": 106.0},
-                mapbox_style="carto-positron", title=f"Situation on {selected_date}"
-            )
-            st.plotly_chart(fig_map, use_container_width=True)
+            if not row_target.empty: add_point(row_target.iloc[0], 'Target City')
+            if row_best['location'] != selected_location: add_point(row_best, 'Best AQI')
+            if row_worst['location'] != selected_location: add_point(row_worst, 'Worst AQI')
             
-            # Metrics
-            m1, m2, m3 = st.columns(3)
-            m1.metric(f"📍 {selected_location}", f"{target_aqi} AQI", "Selected Date")
-            m2.metric(f"✅ Cleanest: {row_best['location']}", f"{int(row_best['aqi'])} AQI", "Best in Vietnam")
-            m3.metric(f"❌ Highest: {row_worst['location']}", f"{int(row_worst['aqi'])} AQI", "Worst in Vietnam", delta_color="inverse")
-        else:
-            st.warning("Coordinates missing for plotted cities.")
+            for idx, row in daily_stats.iterrows():
+                if row['location'] not in [selected_location, row_best['location'], row_worst['location']]:
+                    lat, lon = CITY_COORDS.get(row['location'], [None, None])
+                    if lat:
+                        map_points.append({'location': row['location'], 'aqi': int(row['aqi']), 'lat': lat, 'lon': lon, 'type': 'Others', 'size': 8, 'color': 'grey'})
+
+            df_map = pd.DataFrame(map_points)
+            
+            if not df_map.empty:
+                # Vertical Height Config
+                fig_map = px.scatter_mapbox(
+                    df_map, lat="lat", lon="lon", color="type", size="size",
+                    hover_name="location", hover_data={"aqi": True, "lat": False, "lon": False, "size": False},
+                    zoom=5.2, # Zoom optimized for Vietnam verticality
+                    center={"lat": 16.5, "lon": 106.5}, # Perfect center
+                    height=800, # TALL MAP
+                    mapbox_style="carto-positron", 
+                    title=f"Air Quality Map ({selected_date})"
+                )
+                fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+                st.plotly_chart(fig_map, use_container_width=True)
+            else:
+                st.warning("Coordinates missing.")
     else:
-        st.warning(f"No data available for {selected_date}. Please try another date.")
+        st.warning(f"No data available for {selected_date}.")
 
     st.divider()
 
