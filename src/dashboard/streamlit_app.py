@@ -7,14 +7,14 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
 import os
 
-# --- CONFIGURATION DE LA PAGE ---
+# --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Vietnam Air Quality AI - Analytics",
-    page_icon="📊",
+    page_title="Vietnam Air Quality AI - Technical Showcase",
+    page_icon="🤖",
     layout="wide"
 )
 
-# --- COORDONNÉES GPS COMPLÈTES (Basées sur ton CSV) ---
+# --- CITY COORDINATES (Based on your data) ---
 CITY_COORDS = {
     "Hanoi": [21.0285, 105.8542],
     "Ha Noi": [21.0285, 105.8542],
@@ -61,32 +61,25 @@ CITY_COORDS = {
     "Vinh Phuc": [21.3000, 105.6000]
 }
 
-# --- STYLE CSS ---
+# --- CUSTOM CSS FOR EXPLANATIONS ---
 st.markdown("""
 <style>
-    .metric-card {
+    .explanation-box {
         background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
+        border-left: 4px solid #ff4b4b;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+        font-size: 15px;
     }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: #ffffff;
-        border-radius: 4px 4px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #f0f2f6;
-        border-bottom: 2px solid #ff4b4b;
+    .metric-label {
+        font-size: 14px;
+        color: #555;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- CHARGEMENT DES DONNÉES ---
+# --- DATA LOADING ---
 @st.cache_data
 def load_data():
     possible_paths = ["data/aqi_data.csv", "src/data/aqi_data.csv", "aqi_data.csv"]
@@ -99,9 +92,11 @@ def load_data():
             except: continue
             
     if df is not None:
+        # Standardize Dates
         df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
         df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Ho_Chi_Minh').dt.tz_localize(None)
         
+        # Ensure numbers are floats
         cols_num = ['aqi', 'pm25', 'pm10', 'co', 'no2', 'so2', 'o3']
         for col in cols_num:
             if col in df.columns:
@@ -118,7 +113,7 @@ def get_aqi_color(aqi):
     elif aqi <= 300: return "#8F3F97"
     else: return "#7E0023"
 
-# --- ENTRAÎNEMENT IA ---
+# --- MODEL TRAINING ---
 @st.cache_resource
 def train_model(df_loc):
     features = ['pm25', 'no2', 'so2', 'co', 'o3']
@@ -130,6 +125,7 @@ def train_model(df_loc):
     X = df_loc[features]
     y = df_loc['aqi']
     
+    # Chronological Split (Train on past, Test on future)
     split_idx = int(len(df_loc) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
@@ -142,21 +138,29 @@ def train_model(df_loc):
     return model, X_test, y_test, y_pred, dates_test
 
 # --- MAIN APP ---
-st.title("📊 Analyse Avancée & Performance IA")
+st.title("🤖 Vietnam Air Quality AI - Performance Showcase")
+st.markdown("""
+**Welcome.** This dashboard demonstrates the capabilities of a Machine Learning model (Random Forest) designed to predict Air Quality in Vietnam.
+It highlights the **accuracy**, **reliability**, and **decision-making logic** of the artificial intelligence.
+""")
 
 df = load_data()
 
 if df is not None:
-    st.sidebar.header("🎛️ Configuration")
+    # --- CONFIGURATION SIDEBAR ---
+    st.sidebar.header("⚙️ Configuration")
     locations = sorted(df['location'].unique())
-    selected_location = st.sidebar.selectbox("📍 Ville cible", locations)
+    selected_location = st.sidebar.selectbox("📍 Select a Target City", locations)
     
-    # --- BLOC MAP ---
-    st.subheader("🗺️ Situation Géographique (Moyennes du dernier jour)")
+    # --- 1. GEOGRAPHICAL OVERVIEW ---
+    st.subheader("1. Data Scope & Geographic Coverage")
     st.markdown("""
-    Cette carte affiche la qualité de l'air moyenne observée sur la dernière journée disponible.
-    Elle met en évidence votre ville cible (🎯), ainsi que les villes les plus propres (✅) et les plus polluées (❌) du Vietnam.
-    """)
+    <div class="explanation-box">
+    <b>What are we looking at?</b><br>
+    This map shows the most recent data points collected. It automatically highlights the <b>Target City</b> you selected, 
+    while also benchmarking it against the cleanest (✅) and most polluted (❌) cities currently in the dataset.
+    </div>
+    """, unsafe_allow_html=True)
     
     latest_date = df['timestamp'].max().date()
     df_recent = df[df['timestamp'].dt.date == latest_date]
@@ -178,127 +182,149 @@ if df is not None:
                     'aqi': int(row['aqi']),
                     'lat': lat, 'lon': lon,
                     'type': label_type,
-                    'size': 15 if label_type == 'Target' else 12,
+                    'size': 15 if label_type == 'Target' else 10,
                     'color': get_aqi_color(row['aqi'])
                 })
 
-        if not row_target.empty:
-            add_point(row_target.iloc[0], '🎯 Cible (Target)')
+        # Add points logic
+        if not row_target.empty: add_point(row_target.iloc[0], 'Target City')
+        if row_best['location'] != selected_location: add_point(row_best, 'Best AQI')
+        if row_worst['location'] != selected_location: add_point(row_worst, 'Worst AQI')
         
-        if row_best['location'] != selected_location:
-            add_point(row_best, '✅ Meilleure (Best)')
-        else:
-             for p in map_points:
-                 if p['location'] == selected_location: p['type'] += " & ✅ Best"
+        # Fallback: Add all other cities as small dots for context
+        for idx, row in daily_stats.iterrows():
+            if row['location'] not in [selected_location, row_best['location'], row_worst['location']]:
+                lat, lon = CITY_COORDS.get(row['location'], [None, None])
+                if lat:
+                    map_points.append({'location': row['location'], 'aqi': int(row['aqi']), 'lat': lat, 'lon': lon, 'type': 'Others', 'size': 6, 'color': 'grey'})
 
-        if row_worst['location'] != selected_location:
-            add_point(row_worst, '❌ Pire (Worst)')
-        else:
-             for p in map_points:
-                 if p['location'] == selected_location: p['type'] += " & ❌ Worst"
-        
         df_map = pd.DataFrame(map_points)
         
         if not df_map.empty:
             fig_map = px.scatter_mapbox(
                 df_map, lat="lat", lon="lon", color="type", size="size",
-                hover_name="location", hover_data={"aqi": True, "lat": False, "lon": False},
+                hover_name="location", hover_data={"aqi": True, "lat": False, "lon": False, "size": False},
                 zoom=5, center={"lat": 16.0, "lon": 106.0},
-                mapbox_style="carto-positron", title=f"Aperçu du {latest_date}"
+                mapbox_style="carto-positron", title=f"Situation Snapshot ({latest_date})"
             )
             st.plotly_chart(fig_map, use_container_width=True)
             
+            # Context Metrics
             m1, m2, m3 = st.columns(3)
             if not row_target.empty:
-                m1.metric(f"🎯 {selected_location}", f"{int(row_target.iloc[0]['aqi'])} AQI", "Votre sélection")
-            m2.metric(f"✅ {row_best['location']}", f"{int(row_best['aqi'])} AQI", "Meilleur air")
-            m3.metric(f"❌ {row_worst['location']}", f"{int(row_worst['aqi'])} AQI", "Pire air", delta_color="inverse")
+                m1.metric(f"📍 Selected: {selected_location}", f"{int(row_target.iloc[0]['aqi'])} AQI", "Current Level")
+            m2.metric(f"✅ Cleanest: {row_best['location']}", f"{int(row_best['aqi'])} AQI", "Best in Vietnam")
+            m3.metric(f"❌ Highest Pollution: {row_worst['location']}", f"{int(row_worst['aqi'])} AQI", "Worst in Vietnam", delta_color="inverse")
         else:
-            st.warning("⚠️ Carte vide : Les noms des villes dans le CSV ne correspondent pas aux coordonnées GPS.")
+            st.warning("⚠️ Map data unavailable. Please check coordinate mapping.")
 
     st.divider()
 
-    # --- DASHBOARD ---
+    # --- 2. AI PERFORMANCE ANALYSIS ---
+    st.subheader(f"2. AI Model Performance for {selected_location}")
+    
+    # Train Model
     df_loc = df[df['location'] == selected_location]
-    with st.spinner(f"Entraînement du modèle pour {selected_location}..."):
+    with st.spinner(f"Training Machine Learning Model for {selected_location}..."):
         model, X_test, y_test, y_pred, dates_test = train_model(df_loc)
 
     if model is not None:
+        # Calculate Metrics
         mae = mean_absolute_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Échantillons Testés", len(y_test), border=True)
-        col2.metric("Précision (R²)", f"{r2:.2%}", delta_color="normal" if r2 > 0.7 else "inverse", border=True)
-        col3.metric("Erreur Moyenne (MAE)", f"{mae:.1f}", delta="-Low is good", delta_color="inverse", border=True)
-        col4.metric("RMSE (Erreur Quadratique)", f"{rmse:.1f}", border=True)
+        # --- EXPLANATION BOX FOR METRICS ---
+        st.markdown("""
+        <div class="explanation-box">
+        <b>How to interpret the AI Scorecard below:</b><br>
+        <ul>
+            <li><b>R² Score (Accuracy):</b> Think of this as a test grade out of 100%. A score above 80% means the AI understands the pollution patterns very well.</li>
+            <li><b>Mean Absolute Error (MAE):</b> This is the "Average Mistake". If the real AQI is 150 and the AI guesses 155, the error is 5. Lower is better.</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("🧪 Test Samples", len(y_test), "Data points used for testing")
+        col2.metric("🎯 Model Accuracy (R²)", f"{r2:.1%}", "Higher is better")
+        col3.metric("📉 Average Error (MAE)", f"{mae:.1f}", "Lower is better", delta_color="inverse")
 
         st.markdown("---")
 
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Analyse Temporelle", "🎯 Précision & Corrélation", "📉 Analyse des Erreurs", "🧠 Intégration Modèle"])
+        # --- TABS FOR VISUALIZATION ---
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📈 Visual Proof (Time Series)", 
+            "🎯 Accuracy Check (Scatter)", 
+            "🔎 Quality Control (Errors)", 
+            "🧠 The AI's Logic (Drivers)"
+        ])
 
-        # === TAB 1 ===
+        # === TAB 1: TIME SERIES ===
         with tab1:
-            st.subheader("Comparaison Temporelle")
-            st.info("ℹ️ **Comment lire ce graphe :** La ligne bleue représente ce qui s'est réellement passé. La ligne pointillée orange est ce que l'IA avait prédit. Si les deux courbes se superposent, le modèle est performant.")
+            st.subheader("Does the AI predict the spikes?")
+            st.markdown("""
+            **How to read this:**
+            * **Blue Line:** What actually happened (Real data).
+            * **Orange Dotted Line:** What the AI predicted.
+            * **Goal:** The orange line should stick as close as possible to the blue line. If they overlap, the AI is working perfectly.
+            """)
             
             fig_ts = go.Figure()
-            fig_ts.add_trace(go.Scatter(x=dates_test, y=y_test, mode='lines', name='Réalité', line=dict(color='#1f77b4', width=2)))
-            fig_ts.add_trace(go.Scatter(x=dates_test, y=y_pred, mode='lines', name='Prédiction IA', line=dict(color='#ff7f0e', width=2, dash='dot')))
-            fig_ts.update_layout(hovermode="x unified", xaxis_title="Date", yaxis_title="AQI", legend=dict(orientation="h", y=1.1), height=500)
-            fig_ts.update_xaxes(rangeslider_visible=True)
+            fig_ts.add_trace(go.Scatter(x=dates_test, y=y_test, mode='lines', name='Reality (Actual)', line=dict(color='#1f77b4', width=2)))
+            fig_ts.add_trace(go.Scatter(x=dates_test, y=y_pred, mode='lines', name='AI Prediction', line=dict(color='#ff7f0e', width=2, dash='dot')))
+            fig_ts.update_layout(hovermode="x unified", xaxis_title="Time", yaxis_title="AQI Level", legend=dict(orientation="h", y=1.1), height=500)
             st.plotly_chart(fig_ts, use_container_width=True)
 
-        # === TAB 2 ===
+        # === TAB 2: SCATTER ===
         with tab2:
-            st.subheader("Justesse des Prédictions")
+            st.subheader("Alignment Verification")
+            st.markdown("""
+            **How to read this:**
+            This chart compares every single prediction against reality.
+            * **Grey Line (Diagonal):** The "Perfect Prediction" line.
+            * **Dots:** The AI's guesses.
+            * **Goal:** We want all dots to be tightly packed around the grey diagonal line. Dots far away represent "misses".
+            """)
             
-            col_sc1, col_sc2 = st.columns([2, 1])
+            col_sc1, col_sc2 = st.columns([3, 1])
             with col_sc1:
-                fig_scatter = px.scatter(x=y_test, y=y_pred, labels={'x': 'Réalité (AQI)', 'y': 'Prédiction (AQI)'}, opacity=0.6, trendline="ols", trendline_color_override="red")
+                fig_scatter = px.scatter(x=y_test, y=y_pred, labels={'x': 'Real AQI', 'y': 'Predicted AQI'}, opacity=0.6, trendline="ols", trendline_color_override="red")
                 fig_scatter.add_shape(type="line", line=dict(dash='dash', color='grey'), x0=y_test.min(), y0=y_test.min(), x1=y_test.max(), y1=y_test.max())
                 st.plotly_chart(fig_scatter, use_container_width=True)
-            with col_sc2:
-                st.info("""
-                ℹ️ **Comprendre ce nuage de points :**
-                
-                * **Ligne grise en diagonale :** C'est la perfection (Réalité = Prédiction).
-                * **Points au-dessus :** L'IA est trop pessimiste (elle prédit plus de pollution qu'il n'y en a).
-                * **Points en-dessous :** L'IA est trop optimiste.
-                
-                *Plus les points sont serrés autour de la ligne grise, plus le modèle est fiable.*
-                """)
 
-        # === TAB 3 ===
+        # === TAB 3: RESIDUALS ===
         with tab3:
-            st.subheader("Analyse des Résidus (Erreurs)")
-            residuals = y_test - y_pred
+            st.subheader("Error Pattern Analysis")
+            st.markdown("""
+            **How to read this:**
+            This checks if the AI has a "bias" (e.g., does it always overestimate?).
+            * **Center at 0:** Ideally, the histogram should look like a bell curve centered at 0.
+            * **Meaning:** This implies the AI's errors are random and not due to a systematic flaw in the code.
+            """)
             
-            col_res1, col_res2 = st.columns(2)
-            with col_res1:
-                st.markdown("**1. Répartition des erreurs**")
-                st.caption("On cherche une forme de 'cloche' centrée sur 0. Cela veut dire que l'IA fait autant de petites erreurs positives que négatives (bruit normal).")
-                fig_hist = px.histogram(residuals, nbins=30, labels={'value': 'Erreur (Réel - Prédit)'}, color_discrete_sequence=['#ef553b'])
-                fig_hist.update_layout(showlegend=False)
-                st.plotly_chart(fig_hist, use_container_width=True)
-            with col_res2:
-                st.markdown("**2. Erreurs dans le temps**")
-                st.caption("Si vous voyez des motifs (vagues, lignes), c'est que l'IA rate un phénomène cyclique (ex: heure de pointe).")
-                fig_res_time = px.scatter(x=dates_test, y=residuals, labels={'x': 'Date', 'y': 'Erreur'})
-                fig_res_time.add_hline(y=0, line_dash="dash", line_color="green")
-                st.plotly_chart(fig_res_time, use_container_width=True)
+            residuals = y_test - y_pred
+            fig_hist = px.histogram(residuals, nbins=30, labels={'value': 'Prediction Error (Real - Predicted)'}, color_discrete_sequence=['#ef553b'])
+            fig_hist.update_layout(showlegend=False)
+            st.plotly_chart(fig_hist, use_container_width=True)
 
-        # === TAB 4 ===
+        # === TAB 4: FEATURE IMPORTANCE ===
         with tab4:
-            st.subheader("Explicabilité du Modèle (Feature Importance)")
-            st.info("ℹ️ **Le cerveau de l'IA :** Ce graphique montre quels polluants influencent le plus la décision de l'IA. Si le PM2.5 a la barre la plus longue, c'est que l'IA se base principalement sur les particules fines pour calculer l'indice AQI.")
+            st.subheader("What drives the AI's decisions?")
+            st.markdown("""
+            **How to read this:**
+            The AI analyzes multiple gases (PM2.5, NO2, CO...) to calculate the Air Quality Index.
+            * **Longer Bar:** Means this specific pollutant is the **main driver** of pollution in this city.
+            * **Insight:** This tells us exactly which gas we should monitor most closely.
+            """)
             
             importances = model.feature_importances_
-            df_imp = pd.DataFrame({'Feature': X_test.columns, 'Importance': importances}).sort_values('Importance', ascending=True)
-            fig_imp = px.bar(df_imp, x='Importance', y='Feature', orientation='h', color='Importance', color_continuous_scale='Viridis')
+            df_imp = pd.DataFrame({'Pollutant': X_test.columns, 'Importance': importances}).sort_values('Importance', ascending=True)
+            # Rename for clarity
+            df_imp['Pollutant'] = df_imp['Pollutant'].str.upper()
+            
+            fig_imp = px.bar(df_imp, x='Importance', y='Pollutant', orientation='h', color='Importance', color_continuous_scale='Viridis')
             st.plotly_chart(fig_imp, use_container_width=True)
     else:
-        st.warning("Pas assez de données pour l'IA.")
+        st.warning("Not enough data points to train the AI model for this city yet.")
 else:
-    st.error("CSV introuvable.")
+    st.error("Data file not found. Please ensure the CSV is in the repository.")
