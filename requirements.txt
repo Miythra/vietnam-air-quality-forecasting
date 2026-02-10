@@ -1,6 +1,7 @@
 pandas
 requests
 beautifulsoup4
-psycopg2-binary
+lxml
+psycopg[binary]
 sqlalchemy
 pytz
