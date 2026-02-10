@@ -4,7 +4,6 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
 import os
 
@@ -14,6 +13,25 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+
+# --- COORDONNÉES GPS DES VILLES (Pour la map) ---
+CITY_COORDS = {
+    "Hanoi": [21.0285, 105.8542],
+    "Ho Chi Minh": [10.8231, 106.6297],
+    "Da Nang": [16.0544, 108.2022],
+    "Hai Phong": [20.8449, 106.6881],
+    "Can Tho": [10.0452, 105.7469],
+    "Nha Trang": [12.2388, 109.1967],
+    "Hue": [16.4637, 107.5909],
+    "Ha Long": [20.9069, 107.0734],
+    "Vung Tau": [10.3460, 107.0843],
+    "Da Lat": [11.9404, 108.4583],
+    "Bien Hoa": [10.9574, 106.8427],
+    "Buon Ma Thuot": [12.6675, 108.0383],
+    "Bac Giang": [21.2731, 106.1946],
+    "Bac Ninh": [21.1861, 106.0763],
+    "Thai Nguyen": [21.5942, 105.8482]
+}
 
 # --- STYLE CSS PERSONNALISÉ ---
 st.markdown("""
@@ -48,7 +66,6 @@ st.markdown("""
 @st.cache_data
 def load_data():
     """Charge et nettoie les données historiques."""
-    # Liste des chemins possibles
     possible_paths = [
         "data/aqi_data.csv", "src/data/aqi_data.csv", "aqi_data.csv"
     ]
@@ -75,12 +92,19 @@ def load_data():
         return df.dropna().sort_values('timestamp')
     return None
 
+def get_aqi_color(aqi):
+    if aqi <= 50: return "#00E400"      # Bon (Vert)
+    elif aqi <= 100: return "#FFFF00"    # Modéré (Jaune)
+    elif aqi <= 150: return "#FF7E00"    # Mauvais pour sensibles (Orange)
+    elif aqi <= 200: return "#FF0000"    # Mauvais (Rouge)
+    elif aqi <= 300: return "#8F3F97"    # Très mauvais (Violet)
+    else: return "#7E0023"               # Dangereux (Marron)
+
 # --- ENTRAÎNEMENT DU MODÈLE (CACHÉ) ---
 @st.cache_resource
 def train_model(df_loc):
     """Entraîne le modèle et renvoie les résultats pour visualisation."""
     features = ['pm25', 'no2', 'so2', 'co', 'o3']
-    # Vérification des colonnes existantes
     features = [f for f in features if f in df_loc.columns]
     
     if len(df_loc) < 20 or not features:
@@ -89,8 +113,7 @@ def train_model(df_loc):
     X = df_loc[features]
     y = df_loc['aqi']
     
-    # Split Chronologique (pas aléatoire) pour respecter le temps
-    # On garde les 20% les plus récents pour le test
+    # Split Chronologique
     split_idx = int(len(df_loc) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
@@ -116,7 +139,92 @@ if df is not None:
     locations = sorted(df['location'].unique())
     selected_location = st.sidebar.selectbox("📍 Ville cible", locations)
     
-    # Filtrage Données
+    # --- BLOC MAP (NOUVEAU) ---
+    st.subheader("🗺️ Situation Géographique (Moyennes du dernier jour)")
+    
+    # Calcul des stats du jour le plus récent
+    latest_date = df['timestamp'].max().date()
+    df_recent = df[df['timestamp'].dt.date == latest_date]
+    
+    if not df_recent.empty:
+        # Moyenne AQI par ville pour ce jour
+        daily_stats = df_recent.groupby('location')['aqi'].mean().reset_index()
+        
+        # Identification Best/Worst/Target
+        row_target = daily_stats[daily_stats['location'] == selected_location]
+        row_best = daily_stats.loc[daily_stats['aqi'].idxmin()]
+        row_worst = daily_stats.loc[daily_stats['aqi'].idxmax()]
+        
+        # Construction des données pour la carte
+        map_points = []
+        
+        # Helper pour ajouter un point
+        def add_point(row, label_type):
+            lat, lon = CITY_COORDS.get(row['location'], [None, None])
+            if lat:
+                map_points.append({
+                    'location': row['location'],
+                    'aqi': int(row['aqi']),
+                    'lat': lat,
+                    'lon': lon,
+                    'type': label_type,
+                    'size': 15 if label_type == 'Target' else 12,
+                    'color': get_aqi_color(row['aqi'])
+                })
+
+        # On ajoute les 3 points clés
+        if not row_target.empty:
+            add_point(row_target.iloc[0], '🎯 Cible (Target)')
+        
+        # On évite les doublons si la cible est aussi la Best ou Worst
+        if row_best['location'] != selected_location:
+            add_point(row_best, '✅ Meilleure (Best)')
+        else:
+             # Si la cible est la meilleure, on met à jour le label
+             for p in map_points:
+                 if p['location'] == selected_location: p['type'] += " & ✅ Best"
+
+        if row_worst['location'] != selected_location:
+            add_point(row_worst, '❌ Pire (Worst)')
+        else:
+             # Si la cible est la pire
+             for p in map_points:
+                 if p['location'] == selected_location: p['type'] += " & ❌ Worst"
+        
+        df_map = pd.DataFrame(map_points)
+        
+        if not df_map.empty:
+            fig_map = px.scatter_mapbox(
+                df_map, 
+                lat="lat", lon="lon", 
+                color="type", # Différencier par type
+                size="size",
+                hover_name="location",
+                hover_data={"aqi": True, "lat": False, "lon": False, "size": False, "type": False},
+                zoom=5, 
+                center={"lat": 16.0, "lon": 106.0},
+                mapbox_style="carto-positron",
+                title=f"Aperçu du {latest_date}"
+            )
+            # Personnalisation des couleurs des marqueurs
+            # Note: Plotly Express gère les couleurs auto par catégorie 'type', 
+            # mais on peut forcer les couleurs AQI si on préfère. 
+            # Ici on laisse les couleurs de catégorie pour bien distinguer Target/Best/Worst.
+            
+            st.plotly_chart(fig_map, use_container_width=True)
+            
+            # Petits KPIs sous la carte
+            m1, m2, m3 = st.columns(3)
+            if not row_target.empty:
+                m1.metric(f"🎯 {selected_location}", f"{int(row_target.iloc[0]['aqi'])} AQI", "Votre sélection")
+            m2.metric(f"✅ {row_best['location']}", f"{int(row_best['aqi'])} AQI", "Meilleur air")
+            m3.metric(f"❌ {row_worst['location']}", f"{int(row_worst['aqi'])} AQI", "Pire air", delta_color="inverse")
+
+    st.divider()
+
+    # --- SUITE DU DASHBOARD (Analyses) ---
+    
+    # Filtrage Données pour l'analyse
     df_loc = df[df['location'] == selected_location]
     
     # 2. Entraînement
