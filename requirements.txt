@@ -3,7 +3,4 @@ numpy
 scikit-learn
 plotly
 streamlit>=1.41.0
-requests
-psycopg[binary]
-sqlalchemy
-pytz
+statsmodels
