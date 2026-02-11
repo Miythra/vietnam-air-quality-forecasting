@@ -40,16 +40,19 @@ CITY_COORDS = {
     "Vinh Phuc": [21.3000, 105.6000]
 }
 
-# --- STYLING ---
+# --- STYLING (CORRECTED FOR DARK MODE) ---
 st.markdown("""
 <style>
     .explanation-box {
-        background-color: #f0f2f6;
+        /* Utilisation de rgba pour la transparence : compatible Dark & Light mode */
+        background-color: rgba(128, 128, 128, 0.1); 
         border-left: 4px solid #ff4b4b;
         padding: 15px;
         border-radius: 5px;
         margin-bottom: 20px;
         font-size: 15px;
+        /* Force la couleur du texte à hériter du thème Streamlit (Blanc en Dark, Noir en Light) */
+        color: inherit; 
     }
 </style>
 """, unsafe_allow_html=True)
